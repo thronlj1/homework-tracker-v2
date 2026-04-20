@@ -1,65 +1,206 @@
-# 项目上下文
+# 作业追踪系统 (Homework Tracker)
 
-### 版本技术栈
+## 项目概述
 
-- **Framework**: Next.js 16 (App Router)
-- **Core**: React 19
-- **Language**: TypeScript 5
-- **UI 组件**: shadcn/ui (基于 Radix UI)
-- **Styling**: Tailwind CSS 4
+班级作业轻量级扫码管家，支持学生扫码提交作业和教师端实时监控、催交、豁免等管理功能。
 
-## 目录结构
+### 产品命名
+- **学生端**：`滴！交作业` - 用于教室希沃白板（扫码采集）
+- **教师端**：`作业雷达` - 用于教师手机（管理监控）
 
+## 技术架构
+
+### 技术栈
+- **框架**: Next.js 16 (App Router)
+- **核心**: React 19
+- **语言**: TypeScript 5
+- **UI组件**: shadcn/ui (基于 Radix UI)
+- **样式**: Tailwind CSS 4
+- **数据库**: Supabase (PostgreSQL)
+
+### 系统架构
 ```
-├── public/                 # 静态资源
-├── scripts/                # 构建与启动脚本
-│   ├── build.sh            # 构建脚本
-│   ├── dev.sh              # 开发环境启动脚本
-│   ├── prepare.sh          # 预处理脚本
-│   └── start.sh            # 生产环境启动脚本
-├── src/
-│   ├── app/                # 页面路由与布局
-│   ├── components/ui/      # Shadcn UI 组件库
-│   ├── hooks/              # 自定义 Hooks
-│   ├── lib/                # 工具库
-│   │   └── utils.ts        # 通用工具函数 (cn)
-│   └── server.ts           # 自定义服务端入口
-├── next.config.ts          # Next.js 配置
-├── package.json            # 项目依赖管理
-└── tsconfig.json           # TypeScript 配置
+├── 学生端（采集器）     # /student/*
+│   ├── 班级选择页面     # /student
+│   └── 扫码采集页面     # /student/scanner
+│
+├── 教师端（管理台）     # /teacher/*
+│   ├── 班级列表页面     # /teacher
+│   ├── 数据看板页面     # /teacher/dashboard
+│   └── 系统设置页面     # /teacher/settings
+│
+├── API Routes          # /api/*
+│   ├── /api/classes    # 班级管理
+│   ├── /api/subjects   # 科目管理
+│   ├── /api/students   # 学生管理
+│   ├── /api/submit     # 作业提交
+│   ├── /api/exemptions # 豁免管理
+│   ├── /api/stats      # 统计数据
+│   ├── /api/config     # 系统配置
+│   └── /api/time-guard # 时间守卫
+│
+└── 数据库表结构         # Supabase
+    ├── classes          # 班级表
+    ├── students         # 学生表
+    ├── subjects         # 科目表
+    ├── homework_records # 作业记录表
+    ├── homework_exemptions # 豁免记录表
+    └── system_configs   # 系统配置表
 ```
 
-- 项目文件（如 app 目录、pages 目录、components 等）默认初始化到 `src/` 目录下。
+## 二维码格式
 
-## 包管理规范
+每个学生-科目对应一张二维码，格式为：
+```
+Class_<class_id>_Subject_<subject_id>_Student_<student_id>
+```
 
-**仅允许使用 pnpm** 作为包管理器，**严禁使用 npm 或 yarn**。
-**常用命令**：
-- 安装依赖：`pnpm add <package>`
-- 安装开发依赖：`pnpm add -D <package>`
-- 安装所有依赖：`pnpm install`
-- 移除依赖：`pnpm remove <package>`
+示例：
+```
+Class_1_Subject_1_Student_1
+```
 
-## 开发规范
+## 多级时间守卫
 
-### 编码规范
+系统支持 4 级时间校验，按优先级依次为：
 
-- 默认按 TypeScript `strict` 心智写代码；优先复用当前作用域已声明的变量、函数、类型和导入，禁止引用未声明标识符或拼错变量名。
-- 禁止隐式 `any` 和 `as any`；函数参数、返回值、解构项、事件对象、`catch` 错误在使用前应有明确类型或先完成类型收窄，并清理未使用的变量和导入。
+1. **优先级 1（全局状态）**: 检查系统是否为"寒暑假/长假暂停"状态
+2. **优先级 2（今日人工干预）**: 检查教师是否对今日下达了"强制关闭"或"强制开启"指令
+3. **优先级 3（法定日历）**: 自动调用节假日 API，判断是否为周末或法定节假日
+4. **优先级 4（每日时段）**: 校验当前时间是否在"有效收作业时间段"内（默认 07:00-12:00）
 
-### next.config 配置规范
+## 数据库表设计
 
-- 配置的路径不要写死绝对路径，必须使用 path.resolve(__dirname, ...)、import.meta.dirname 或 process.cwd() 动态拼接。
+### classes（班级表）
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | serial | 主键 |
+| name | varchar(100) | 班级名称 |
+| class_image | text | 班级图片 |
+| created_at | timestamp | 创建时间 |
+| updated_at | timestamp | 更新时间 |
 
-### Hydration 问题防范
+### students（学生表）
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | serial | 主键 |
+| class_id | integer | 班级ID（外键） |
+| name | varchar(100) | 学生姓名 |
+| student_code | varchar(50) | 学号 |
+| avatar_image | text | 学生头像 |
+| created_at | timestamp | 创建时间 |
+| updated_at | timestamp | 更新时间 |
 
-1. 严禁在 JSX 渲染逻辑中直接使用 typeof window、Date.now()、Math.random() 等动态数据。**必须使用 'use client' 并配合 useEffect + useState 确保动态内容仅在客户端挂载后渲染**；同时严禁非法 HTML 嵌套（如 <p> 嵌套 <div>）。
-2. **禁止使用 head 标签**，优先使用 metadata，详见文档：https://nextjs.org/docs/app/api-reference/functions/generate-metadata
-   1. 三方 CSS、字体等资源可在 `globals.css` 中顶部通过 `@import` 引入或使用 next/font
-   2. preload, preconnect, dns-prefetch 通过 ReactDOM 的 preload、preconnect、dns-prefetch 方法引入
-   3. json-ld 可阅读 https://nextjs.org/docs/app/guides/json-ld
+### subjects（科目表）
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | serial | 主键 |
+| class_id | integer | 班级ID（外键） |
+| name | varchar(100) | 科目名称 |
+| subject_image | text | 科目图片 |
+| created_at | timestamp | 创建时间 |
+| updated_at | timestamp | 更新时间 |
 
-## UI 设计与组件规范 (UI & Styling Standards)
+### homework_records（作业记录表）
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | serial | 主键 |
+| class_id | integer | 班级ID（外键） |
+| student_id | integer | 学生ID（外键） |
+| subject_id | integer | 科目ID（外键） |
+| submit_date | varchar(10) | 提交日期 (YYYY-MM-DD) |
+| submit_time | timestamp | 提交时间 |
+| created_at | timestamp | 创建时间 |
 
-- 模板默认预装核心组件库 `shadcn/ui`，位于`src/components/ui/`目录下
-- Next.js 项目**必须默认**采用 shadcn/ui 组件、风格和规范，**除非用户指定用其他的组件和规范。**
+### homework_exemptions（豁免记录表）
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | serial | 主键 |
+| class_id | integer | 班级ID（外键） |
+| student_id | integer | 学生ID（外键） |
+| subject_id | integer | 科目ID（外键） |
+| exempt_date | varchar(10) | 豁免日期 (YYYY-MM-DD) |
+| reason | varchar(255) | 豁免原因 |
+| created_at | timestamp | 创建时间 |
+| updated_at | timestamp | 更新时间 |
+
+### system_configs（系统配置表）
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| id | serial | 主键 |
+| class_id | integer | 班级ID（可空表示全局配置） |
+| scan_start_time | varchar(5) | 收作业开始时间 (HH:mm) |
+| scan_end_time | varchar(5) | 收作业结束时间 (HH:mm) |
+| alert_continuous_days | integer | 预警连续天数 |
+| global_task_status | varchar(20) | 全局任务状态 (semester/vacation) |
+| today_override_date | varchar(10) | 今日覆盖日期 |
+| today_override_status | varchar(20) | 今日覆盖状态 (auto/force_open/force_close) |
+| created_at | timestamp | 创建时间 |
+| updated_at | timestamp | 更新时间 |
+
+## 开发命令
+
+```bash
+# 安装依赖
+pnpm install
+
+# 开发环境运行
+pnpm dev
+
+# 构建生产版本
+pnpm build
+
+# 静态检查
+pnpm lint
+
+# 类型检查
+pnpm ts-check
+```
+
+## 数据库操作
+
+```bash
+# 同步数据库模型
+coze-coding-ai db generate-models
+
+# 执行数据库迁移
+coze-coding-ai db upgrade
+```
+
+## 环境变量
+
+系统使用 Supabase 数据库，需要配置以下环境变量：
+- `COZE_SUPABASE_URL`: Supabase 项目 URL
+- `COZE_SUPABASE_ANON_KEY`: Supabase 匿名密钥
+- `COZE_SUPABASE_SERVICE_ROLE_KEY`: Supabase 服务端密钥
+
+## 功能特性
+
+### 学生端功能
+- [x] 班级选择入口
+- [x] 扫码枪全局监听
+- [x] 二维码解析与验证
+- [x] 重复提交拦截
+- [x] 视听反馈（成功音/失败音）
+- [x] 多级时间守卫校验
+- [x] 系统锁定状态展示
+
+### 教师端功能
+- [x] 班级列表展示
+- [x] 今日作业进度看板
+- [x] 各科目提交统计
+- [x] 已交/未交名单
+- [x] 一键复制催交文案
+- [x] 学生豁免操作
+- [x] 提交记录撤销
+- [x] 学情预警提示
+- [x] 系统规则与日历控制台
+
+### 系统功能
+- [x] 班级管理（增删改）
+- [x] 科目管理（增删改）
+- [x] 学生管理（增删改）
+- [x] 全局任务开关（学期中/寒暑假）
+- [x] 今日状态覆盖（强制开启/强制关闭）
+- [x] 收作业时段配置
+- [x] 预警天数配置

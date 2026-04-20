@@ -1,0 +1,52 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { getStudentsByClass, createStudent, getStudentById } from '@/lib/database';
+
+export async function GET(request: NextRequest) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const classId = searchParams.get('classId');
+    
+    if (!classId) {
+      return NextResponse.json({ 
+        success: false, 
+        message: '班级ID不能为空' 
+      }, { status: 400 });
+    }
+    
+    const students = await getStudentsByClass(parseInt(classId, 10));
+    return NextResponse.json({ success: true, data: students });
+  } catch (error) {
+    console.error('Get students error:', error);
+    return NextResponse.json({ 
+      success: false, 
+      message: error instanceof Error ? error.message : '获取学生列表失败' 
+    }, { status: 500 });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const { classId, name, studentCode, avatarImage } = await request.json();
+    
+    if (!classId || !name || !studentCode) {
+      return NextResponse.json({ 
+        success: false, 
+        message: '缺少必要参数' 
+      }, { status: 400 });
+    }
+    
+    const newStudent = await createStudent(
+      parseInt(classId, 10), 
+      name.trim(), 
+      studentCode.trim(), 
+      avatarImage
+    );
+    return NextResponse.json({ success: true, data: newStudent });
+  } catch (error) {
+    console.error('Create student error:', error);
+    return NextResponse.json({ 
+      success: false, 
+      message: error instanceof Error ? error.message : '创建学生失败' 
+    }, { status: 500 });
+  }
+}
