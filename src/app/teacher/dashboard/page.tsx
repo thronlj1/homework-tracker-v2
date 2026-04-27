@@ -1,8 +1,8 @@
 'use client';
 
-import { Suspense, useEffect, useState, useCallback } from 'react';
+import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getClassById, getClassStats, getStudentStatuses, checkStudentWarnings, createExemption, deleteHomeworkRecord } from '@/lib/database';
+import { getClassById, getClassStats, getStudentStatuses, checkStudentWarnings, createExemption, deleteHomeworkRecord, getTodayDate } from '@/lib/database';
 import type { Class, ClassStats, StudentStatus, Subject } from '@/types/database';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -16,18 +16,26 @@ function DashboardContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const classId = parseInt(searchParams.get('classId') || '0', 10);
+  const initialSubjectId = parseInt(searchParams.get('subjectId') || '0', 10);
+  const initialTab = searchParams.get('tab');
   
   const [classInfo, setClassInfo] = useState<Class | null>(null);
   const [stats, setStats] = useState<ClassStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedSubject, setSelectedSubject] = useState<number | null>(null);
+  const [selectedSubject, setSelectedSubject] = useState<number | null>(initialSubjectId || null);
   const [studentStatuses, setStudentStatuses] = useState<StudentStatus[]>([]);
   const [warningStudents, setWarningStudents] = useState<number[]>([]);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [statusesLoading, setStatusesLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState(
+    initialTab === 'submitted' || initialTab === 'not_submitted' || initialTab === 'overview'
+      ? initialTab
+      : 'overview'
+  );
   const [exemptDialogOpen, setExemptDialogOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<StudentStatus | null>(null);
+  const latestStatusRequestRef = useRef(0);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getTodayDate();
 
   const loadStats = useCallback(async () => {
     if (!classId) return;
@@ -44,6 +52,40 @@ function DashboardContent() {
       console.error('Load stats error:', error);
     }
   }, [classId, today, selectedSubject]);
+
+  const loadStudentStatuses = useCallback(async (subjectId: number) => {
+    if (!classId || !subjectId) return;
+
+    const requestId = latestStatusRequestRef.current + 1;
+    latestStatusRequestRef.current = requestId;
+    setStatusesLoading(true);
+
+    try {
+      // 先加载名单（快路径），避免预警计算慢导致“列表空白像 bug”
+      const statuses = await getStudentStatuses(classId, subjectId, today);
+      if (requestId !== latestStatusRequestRef.current) return;
+      setStudentStatuses(statuses);
+      setStatusesLoading(false);
+
+      // 再异步加载预警（慢路径）
+      checkStudentWarnings(classId, subjectId, 3)
+        .then((warnings) => {
+          if (requestId !== latestStatusRequestRef.current) return;
+          setWarningStudents(warnings);
+        })
+        .catch((error) => {
+          if (requestId !== latestStatusRequestRef.current) return;
+          console.error('Load warning students error:', error);
+        });
+    } catch (error) {
+      if (requestId !== latestStatusRequestRef.current) return;
+      console.error('Load student statuses error:', error);
+    } finally {
+      if (requestId === latestStatusRequestRef.current) {
+        setStatusesLoading(false);
+      }
+    }
+  }, [classId, today]);
 
   useEffect(() => {
     async function loadData() {
@@ -77,45 +119,101 @@ function DashboardContent() {
 
   // 加载学生状态
   useEffect(() => {
-    async function loadStudentStatuses() {
-      if (!classId || !selectedSubject) return;
-      
-      try {
-        const [statuses, warnings] = await Promise.all([
-          getStudentStatuses(classId, selectedSubject, today),
-          checkStudentWarnings(classId, selectedSubject, 3),
-        ]);
-        
-        setStudentStatuses(statuses);
-        setWarningStudents(warnings);
-      } catch (error) {
-        console.error('Load student statuses error:', error);
-      }
-    }
-    
-    loadStudentStatuses();
-  }, [classId, selectedSubject, today, stats]);
+    if (!selectedSubject) return;
+    loadStudentStatuses(selectedSubject);
+  }, [selectedSubject, stats, loadStudentStatuses]);
 
   // 刷新数据
   async function handleRefresh() {
     await loadStats();
+    if (selectedSubject) {
+      await loadStudentStatuses(selectedSubject);
+    }
   }
 
   // 一键催交
-  async function handleCopyReminder() {
-    if (!stats || !selectedSubject) return;
-    
-    const subjectStats = stats.subjects.find(s => s.subject_id === selectedSubject);
+  async function handleSendReminder(subjectId: number) {
+    if (!stats) return;
+
+    const subjectStats = stats.subjects.find(s => s.subject_id === subjectId);
     if (!subjectStats) return;
-    
-    const notSubmitted = studentStatuses.filter(s => s.status === 'not_submitted');
+
+    let statuses = studentStatuses;
+    if (selectedSubject !== subjectId) {
+      statuses = await getStudentStatuses(classId, subjectId, today);
+    }
+    const notSubmitted = statuses.filter(s => s.status === 'not_submitted');
     if (notSubmitted.length === 0) return;
-    
+
     const names = notSubmitted.map(s => s.student_name).join('、');
-    const text = `【催交提醒】${classInfo?.name}的同学们，以下同学还未提交${subjectStats.subject_name}作业：${names}。请尽快提交！`;
-    
-    await navigator.clipboard.writeText(text);
-    alert('催交文案已复制到剪贴板');
+    await fetch('/api/reminder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        classId,
+        message: `${subjectStats.subject_name}还有 ${notSubmitted.length} 位同学未交：${names}。请尽快提交。`,
+      }),
+    });
+    alert(`已发送${subjectStats.subject_name}催交提醒（${notSubmitted.length} 人未交）`);
+  }
+
+  function escapeCsvCell(value: string): string {
+    if (/[",\n]/.test(value)) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  }
+
+  async function handleExportSubjectStatus() {
+    if (!selectedSubject || !stats || !classInfo) return;
+
+    try {
+      const subject = stats.subjects.find((s) => s.subject_id === selectedSubject);
+      if (!subject) return;
+
+      const statuses = await getStudentStatuses(classId, selectedSubject, today);
+      const warningSet = new Set(await checkStudentWarnings(classId, selectedSubject, 3));
+
+      const rows: string[] = [
+        ['班级', '日期', '科目', '学生姓名', '学号', '状态', '是否预警', '提交时间'].join(','),
+      ];
+
+      for (const item of statuses) {
+        const statusLabel =
+          item.status === 'submitted'
+            ? '已提交'
+            : item.status === 'exempted'
+              ? '已豁免'
+              : '未提交';
+
+        rows.push(
+          [
+            escapeCsvCell(classInfo.name),
+            today,
+            escapeCsvCell(subject.subject_name),
+            escapeCsvCell(item.student_name),
+            escapeCsvCell(item.student_code),
+            statusLabel,
+            warningSet.has(item.student_id) ? '是' : '否',
+            item.submit_time ? escapeCsvCell(item.submit_time) : '',
+          ].join(',')
+        );
+      }
+
+      const csv = `\uFEFF${rows.join('\n')}`;
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${classInfo.name}-${subject.subject_name}-${today}-作业情况.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Export subject status error:', error);
+      alert('导出失败，请重试');
+    }
   }
 
   // 豁免操作
@@ -194,7 +292,7 @@ function DashboardContent() {
       <main className="max-w-4xl mx-auto p-4">
         <div className="mb-6">
           <h2 className="text-lg font-semibold text-gray-700 mb-3">今日作业进度</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-3 gap-2">
             {stats.subjects.map((subject) => (
               <Card 
                 key={subject.subject_id}
@@ -203,12 +301,24 @@ function DashboardContent() {
                 }`}
                 onClick={() => setSelectedSubject(subject.subject_id)}
               >
-                <CardContent className="p-4 text-center">
-                  <p className="text-sm text-gray-500 mb-1">{subject.subject_name}</p>
-                  <p className="text-2xl font-bold text-purple-600">{subject.percentage}%</p>
-                  <p className="text-xs text-gray-400 mt-1">
+                <CardContent className="p-3 text-center">
+                  <p className="text-xs text-gray-500 mb-1">{subject.subject_name}</p>
+                  <p className="text-xl font-bold text-purple-600">{subject.percentage}%</p>
+                  <p className="text-[11px] text-gray-400 mt-1">
                     {subject.submitted}/{subject.total}
                   </p>
+                  <Button
+                    size="sm"
+                    variant={selectedSubject === subject.subject_id ? 'default' : 'outline'}
+                    className="mt-2 h-7 px-2 text-[11px]"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedSubject(subject.subject_id);
+                      handleSendReminder(subject.subject_id);
+                    }}
+                  >
+                    一键催交
+                  </Button>
                 </CardContent>
               </Card>
             ))}
@@ -226,9 +336,14 @@ function DashboardContent() {
           <TabsContent value="overview" className="mt-4">
             <Card>
               <CardHeader>
-                <CardTitle>
-                  {stats.subjects.find(s => s.subject_id === selectedSubject)?.subject_name} 详情
-                </CardTitle>
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle>
+                    {stats.subjects.find(s => s.subject_id === selectedSubject)?.subject_name} 详情
+                  </CardTitle>
+                  <Button variant="outline" size="sm" onClick={handleExportSubjectStatus}>
+                    导出作业情况
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
@@ -260,11 +375,6 @@ function DashboardContent() {
                   </div>
                 )}
                 
-                <div className="mt-4 flex gap-2">
-                  <Button onClick={handleCopyReminder} className="flex-1">
-                    📋 一键复制催交文案
-                  </Button>
-                </div>
               </CardContent>
             </Card>
           </TabsContent>
@@ -272,7 +382,10 @@ function DashboardContent() {
           <TabsContent value="submitted" className="mt-4">
             <Card>
               <CardHeader>
-                <CardTitle>已提交名单 ({studentStatuses.filter(s => s.status === 'submitted').length}人)</CardTitle>
+                <CardTitle>
+                  已提交名单
+                  {statusesLoading ? '（加载中...）' : ` (${studentStatuses.filter(s => s.status === 'submitted').length}人)`}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
@@ -304,7 +417,9 @@ function DashboardContent() {
                     ))}
                   
                   {studentStatuses.filter(s => s.status === 'submitted').length === 0 && (
-                    <p className="text-center text-gray-500 py-8">暂无已提交记录</p>
+                    <p className="text-center text-gray-500 py-8">
+                      {statusesLoading ? '名单加载中...' : '暂无已提交记录'}
+                    </p>
                   )}
                 </div>
               </CardContent>
@@ -314,7 +429,10 @@ function DashboardContent() {
           <TabsContent value="not_submitted" className="mt-4">
             <Card>
               <CardHeader>
-                <CardTitle>未提交名单 ({studentStatuses.filter(s => s.status === 'not_submitted').length}人)</CardTitle>
+                <CardTitle>
+                  未提交名单
+                  {statusesLoading ? '（加载中...）' : ` (${studentStatuses.filter(s => s.status === 'not_submitted').length}人)`}
+                </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
@@ -379,7 +497,9 @@ function DashboardContent() {
                     ))}
                   
                   {studentStatuses.filter(s => s.status === 'not_submitted').length === 0 && (
-                    <p className="text-center text-green-600 py-8">🎉 所有同学都已提交作业！</p>
+                    <p className="text-center text-green-600 py-8">
+                      {statusesLoading ? '名单加载中...' : '🎉 所有同学都已提交作业！'}
+                    </p>
                   )}
                 </div>
               </CardContent>

@@ -75,11 +75,32 @@ export async function createClass(name: string, classImage?: string): Promise<Cl
   return data;
 }
 
+export async function updateClass(
+  id: number,
+  updates: Partial<Pick<Class, 'name' | 'class_image'>>
+): Promise<Class> {
+  const client = await getSupabaseClient();
+  const { data, error } = await client
+    .from('classes')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(`更新班级失败: ${error.message}`);
+  return data;
+}
+
+export async function deleteClass(id: number): Promise<void> {
+  const client = await getSupabaseClient();
+  const { error } = await client.from('classes').delete().eq('id', id);
+  if (error) throw new Error(`删除班级失败: ${error.message}`);
+}
+
 // ==================== 学生操作 ====================
 
 export async function getStudentsByClass(classId: number): Promise<Student[]> {
   const client = await getSupabaseClient();
-  const { data, error } = await client.from('students').select('*').eq('class_id', classId).order('name');
+  const { data, error } = await client.from('students').select('*').eq('class_id', classId).order('student_code');
   if (error) throw new Error(`获取学生列表失败: ${error.message}`);
   return data || [];
 }
@@ -105,6 +126,27 @@ export async function createStudent(
     .single();
   if (error) throw new Error(`创建学生失败: ${error.message}`);
   return data;
+}
+
+export async function updateStudent(
+  id: number,
+  updates: Partial<Pick<Student, 'name' | 'student_code' | 'avatar_image'>>
+): Promise<Student> {
+  const client = await getSupabaseClient();
+  const { data, error } = await client
+    .from('students')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(`更新学生失败: ${error.message}`);
+  return data;
+}
+
+export async function deleteStudent(id: number): Promise<void> {
+  const client = await getSupabaseClient();
+  const { error } = await client.from('students').delete().eq('id', id);
+  if (error) throw new Error(`删除学生失败: ${error.message}`);
 }
 
 // ==================== 科目操作 ====================
@@ -136,6 +178,27 @@ export async function createSubject(
     .single();
   if (error) throw new Error(`创建科目失败: ${error.message}`);
   return data;
+}
+
+export async function updateSubject(
+  id: number,
+  updates: Partial<Pick<Subject, 'name' | 'subject_image'>>
+): Promise<Subject> {
+  const client = await getSupabaseClient();
+  const { data, error } = await client
+    .from('subjects')
+    .update({ ...updates, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select()
+    .single();
+  if (error) throw new Error(`更新科目失败: ${error.message}`);
+  return data;
+}
+
+export async function deleteSubject(id: number): Promise<void> {
+  const client = await getSupabaseClient();
+  const { error } = await client.from('subjects').delete().eq('id', id);
+  if (error) throw new Error(`删除科目失败: ${error.message}`);
 }
 
 // ==================== 作业记录操作 ====================

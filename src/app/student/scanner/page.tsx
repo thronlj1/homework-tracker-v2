@@ -7,11 +7,15 @@ import type { Class, TimeGuardStatus, SubmitResult } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Switch } from '@/components/ui/switch';
 
 function ScannerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const classId = parseInt(searchParams.get('classId') || '0', 10);
+  const appMode = process.env.NEXT_PUBLIC_APP_MODE ?? 'prod';
+  const debugFeatureEnabled = appMode === 'debug';
+  const debugFromQuery = debugFeatureEnabled && searchParams.get('debug') === '1';
   
   const [classInfo, setClassInfo] = useState<Class | null>(null);
   const [timeGuard, setTimeGuard] = useState<TimeGuardStatus | null>(null);
@@ -19,34 +23,88 @@ function ScannerContent() {
   const [scanning, setScanning] = useState(false);
   const [lastResult, setLastResult] = useState<SubmitResult | null>(null);
   const [inputBuffer, setInputBuffer] = useState('');
+  const [debugMode, setDebugMode] = useState(debugFromQuery);
+  const [manualCode, setManualCode] = useState('');
+  const [reminderText, setReminderText] = useState<string | null>(null);
+  const [reminderId, setReminderId] = useState<string | null>(null);
+  const [dismissedReminderId, setDismissedReminderId] = useState<string | null>(null);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const lastPlayedReminderIdRef = useRef<string | null>(null);
+
+  const parsedReminder = (() => {
+    if (!reminderText) return null;
+    const matched = reminderText.match(/^(.+?)还有\s*(\d+)\s*位同学未交[:：](.+)$/);
+    if (!matched) return null;
+    return {
+      subjectName: matched[1].trim(),
+      count: matched[2].trim(),
+      names: matched[3].trim(),
+    };
+  })();
   const inputRef = useRef<HTMLInputElement>(null);
   const bufferTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 播放提示音
-  const playSound = useCallback((type: 'success' | 'duplicate' | 'invalid' | 'error') => {
-    const audioContext = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-    
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-    
-    if (type === 'success') {
-      oscillator.frequency.value = 880;
-      oscillator.type = 'sine';
-      gainNode.gain.value = 0.3;
-    } else {
-      oscillator.frequency.value = 440;
-      oscillator.type = 'square';
-      gainNode.gain.value = 0.2;
+  const playSound = useCallback((type: 'success' | 'duplicate' | 'invalid' | 'error' | 'reminder') => {
+    const audioContext = new (window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+
+    function playTone(
+      frequency: number,
+      durationMs: number,
+      startDelayMs: number,
+      oscillatorType: OscillatorType = 'sine',
+      volume: number = 0.2
+    ) {
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      oscillator.frequency.value = frequency;
+      oscillator.type = oscillatorType;
+      gainNode.gain.value = volume;
+
+      const startTime = audioContext.currentTime + startDelayMs / 1000;
+      const endTime = startTime + durationMs / 1000;
+      oscillator.start(startTime);
+      oscillator.stop(endTime);
     }
-    
-    oscillator.start();
+
+    if (type === 'success') {
+      // 通过提示音：短促双音，上扬
+      playTone(740, 120, 0, 'sine', 0.22);
+      playTone(988, 150, 140, 'sine', 0.26);
+    } else if (type === 'duplicate') {
+      // 重复提交：双“嘟嘟”
+      playTone(420, 130, 0, 'square', 0.18);
+      playTone(420, 130, 180, 'square', 0.18);
+    } else if (type === 'invalid' || type === 'error') {
+      // 异常提示：低频长音
+      playTone(320, 260, 0, 'square', 0.2);
+    } else if (type === 'reminder') {
+      // 教师提醒：温和三连音
+      playTone(660, 110, 0, 'triangle', 0.17);
+      playTone(784, 110, 130, 'triangle', 0.17);
+      playTone(988, 140, 260, 'triangle', 0.19);
+    }
+
     setTimeout(() => {
-      oscillator.stop();
       audioContext.close();
-    }, type === 'success' ? 150 : 300);
+    }, 1200);
   }, []);
+
+  const speakText = useCallback(
+    (text: string) => {
+      if (!voiceEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = 'zh-CN';
+      utterance.rate = 1;
+      utterance.pitch = 1;
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+    },
+    [voiceEnabled]
+  );
 
   // 处理扫码输入
   const handleScanInput = useCallback(async (value: string) => {
@@ -64,6 +122,9 @@ function ScannerContent() {
       const result: SubmitResult = await response.json();
       setLastResult(result);
       playSound(result.type);
+      if (result.type === 'success') {
+        speakText(result.message);
+      }
       
       // 2秒后清除结果显示
       setTimeout(() => {
@@ -83,8 +144,9 @@ function ScannerContent() {
     } finally {
       setScanning(false);
       setInputBuffer('');
+      setManualCode('');
     }
-  }, [classId, playSound]);
+  }, [classId, playSound, speakText]);
 
   // 键盘事件监听
   useEffect(() => {
@@ -174,6 +236,68 @@ function ScannerContent() {
     }
   }, [loading, timeGuard]);
 
+  // 记住语音播报开关
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem('student_voice_enabled');
+    if (stored !== null) {
+      setVoiceEnabled(stored === '1');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('student_voice_enabled', voiceEnabled ? '1' : '0');
+  }, [voiceEnabled]);
+
+  // 轮询获取教师端催交提醒
+  useEffect(() => {
+    if (!classId) return;
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    async function pollReminder() {
+      try {
+        const response = await fetch(`/api/reminder?classId=${classId}`, {
+          cache: 'no-store',
+        });
+        if (!response.ok || cancelled) return;
+        const payload = await response.json();
+        const record = payload?.data as { id?: string; message?: string } | null;
+        if (!record?.id || !record.message) return;
+        if (record.id === dismissedReminderId) return;
+        setReminderId(record.id);
+        setReminderText(record.message);
+        if (lastPlayedReminderIdRef.current !== record.id) {
+          lastPlayedReminderIdRef.current = record.id;
+          playSound('reminder');
+          speakText(`老师提醒：${record.message}`);
+        }
+      } catch {
+        // Ignore reminder polling failures.
+      }
+    }
+
+    pollReminder();
+    timer = setInterval(pollReminder, 5000);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [classId, dismissedReminderId, playSound, speakText]);
+
+  // 提醒自动关闭（显示 1 分钟）
+  useEffect(() => {
+    if (!reminderText || !reminderId) return;
+    const timer = setTimeout(() => {
+      setDismissedReminderId(reminderId);
+      setReminderText(null);
+    }, 60 * 1000);
+    return () => clearTimeout(timer);
+  }, [reminderText, reminderId]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center">
@@ -220,7 +344,7 @@ function ScannerContent() {
             </button>
             <div>
               <h1 className="text-xl font-bold text-gray-900">滴！交作业</h1>
-              <p className="text-sm text-gray-500">{classInfo?.name}</p>
+              <p className="text-sm font-bold text-gray-700">{classInfo?.name}</p>
             </div>
           </div>
           <div className="text-right">
@@ -250,6 +374,46 @@ function ScannerContent() {
 
       {/* 主内容区 */}
       <main className="flex-1 flex flex-col items-center justify-center p-4">
+        {/* 教师端催交提醒 */}
+        {reminderText && (
+          <div className="w-full max-w-md mb-4">
+            <Card className="border-amber-300 bg-amber-50">
+              <CardContent className="pt-4 pb-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-amber-700 mb-1">老师提醒</p>
+                    {parsedReminder ? (
+                      <>
+                        <p className="text-sm text-amber-700">
+                          <span className="font-bold text-amber-900">【{parsedReminder.subjectName}】</span>
+                          <span> 还有 </span>
+                          <span className="font-extrabold text-amber-900">{parsedReminder.count}</span>
+                          <span> 位同学未交作业</span>
+                        </p>
+                        <p className="text-xs text-amber-700 mt-1">
+                          未交名单：{parsedReminder.names}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-amber-700">{reminderText}</p>
+                    )}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setDismissedReminderId(reminderId);
+                      setReminderText(null);
+                    }}
+                  >
+                    关闭
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
         {/* 扫描动画区域 */}
         <div className="relative w-full max-w-md">
           <div className="aspect-square bg-white rounded-3xl shadow-xl flex flex-col items-center justify-center relative overflow-hidden">
@@ -308,6 +472,53 @@ function ScannerContent() {
           <p className="text-sm">系统支持自动识别扫码枪输入</p>
           <p className="text-xs mt-1">也可直接在此页面输入二维码编号</p>
         </div>
+
+        {/* Debug: 手动输入作业码（仅 NEXT_PUBLIC_APP_MODE=debug 时显示） */}
+        {debugFeatureEnabled && (
+          <div className="mt-6 w-full max-w-md">
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">调试模式</CardTitle>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDebugMode((prev) => !prev)}
+                  >
+                    {debugMode ? '关闭' : '开启'}
+                  </Button>
+                </div>
+              </CardHeader>
+              {debugMode && (
+                <CardContent>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={manualCode}
+                      onChange={(e) => setManualCode(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && manualCode.trim() && !scanning) {
+                          handleScanInput(manualCode);
+                        }
+                      }}
+                      placeholder="例如: Class_1_Subject_1_Student_1"
+                      className="flex-1 h-10 rounded-md border border-input bg-background px-3 text-sm"
+                    />
+                    <Button
+                      onClick={() => handleScanInput(manualCode)}
+                      disabled={!manualCode.trim() || scanning}
+                    >
+                      提交
+                    </Button>
+                  </div>
+                  <p className="mt-2 text-xs text-gray-500">
+                    仅用于本地联调；可通过 URL 参数 <code>?debug=1</code> 进入页面时自动开启。
+                  </p>
+                </CardContent>
+              )}
+            </Card>
+          </div>
+        )}
       </main>
 
       {/* 底部状态栏 */}
@@ -317,8 +528,20 @@ function ScannerContent() {
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
             <span>等待扫码</span>
           </div>
-          <div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Switch
+                id="voice-switch"
+                checked={voiceEnabled}
+                onCheckedChange={setVoiceEnabled}
+              />
+              <label htmlFor="voice-switch" className="text-xs text-gray-600 cursor-pointer">
+                语音播报
+              </label>
+            </div>
+            <div>
             今日已提交: {lastResult?.type === 'success' ? '1' : '0'} 条
+            </div>
           </div>
         </div>
       </footer>

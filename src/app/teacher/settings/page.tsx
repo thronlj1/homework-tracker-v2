@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { getClasses, createClass, getSubjectsByClass, createSubject, getStudentsByClass, createStudent, getSystemConfig, updateSystemConfig, createSystemConfig } from '@/lib/database';
+import { getClasses, createClass, updateClass, deleteClass, getSubjectsByClass, createSubject, updateSubject, deleteSubject, getStudentsByClass, createStudent, updateStudent, deleteStudent, getSystemConfig, updateSystemConfig, createSystemConfig } from '@/lib/database';
 import type { Class, Subject, Student, SystemConfig } from '@/types/database';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Download, Pencil, Trash2 } from 'lucide-react';
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -90,6 +91,105 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleEditClass(classItem: Class) {
+    const name = window.prompt('请输入新的班级名称', classItem.name);
+    if (!name || !name.trim() || name.trim() === classItem.name) return;
+    try {
+      await updateClass(classItem.id, { name: name.trim() });
+      await loadData();
+    } catch (error) {
+      console.error('Update class error:', error);
+      alert('修改班级失败');
+    }
+  }
+
+  async function handleDeleteClass(classItem: Class) {
+    if (!window.confirm(`确认删除班级「${classItem.name}」？关联的学生和科目也会被删除。`)) return;
+    const confirmName = window.prompt(`请输入班级名称「${classItem.name}」以确认删除`);
+    if (confirmName !== classItem.name) {
+      alert('输入的班级名称不匹配，已取消删除');
+      return;
+    }
+    try {
+      await deleteClass(classItem.id);
+      if (selectedClassId === classItem.id) {
+        setSelectedClassId(null);
+      }
+      await loadData();
+    } catch (error) {
+      console.error('Delete class error:', error);
+      alert('删除班级失败');
+    }
+  }
+
+  function escapeCsvCell(value: string): string {
+    if (/[",\n]/.test(value)) {
+      return `"${value.replace(/"/g, '""')}"`;
+    }
+    return value;
+  }
+
+  async function handleExportClassCodes() {
+    if (!selectedClassId) {
+      alert('请先选择一个班级再导出');
+      return;
+    }
+
+    const classItem = classes.find((c) => c.id === selectedClassId);
+    if (!classItem) {
+      alert('未找到当前班级信息');
+      return;
+    }
+
+    try {
+      const [subjectsData, studentsData] = await Promise.all([
+        getSubjectsByClass(selectedClassId),
+        getStudentsByClass(selectedClassId),
+      ]);
+
+      if (subjectsData.length === 0 || studentsData.length === 0) {
+        alert('当前班级缺少科目或学生，无法导出二维码码表');
+        return;
+      }
+
+      const header = ['班级', '班级ID', '科目', '科目ID', '学生', '学生ID', '学号', '二维码码串'];
+      const rows: string[] = [header.join(',')];
+
+      for (const subject of subjectsData) {
+        for (const student of studentsData) {
+          const qrCode = `Class_${selectedClassId}_Subject_${subject.id}_Student_${student.id}`;
+          rows.push(
+            [
+              escapeCsvCell(classItem.name),
+              String(selectedClassId),
+              escapeCsvCell(subject.name),
+              String(subject.id),
+              escapeCsvCell(student.name),
+              String(student.id),
+              escapeCsvCell(student.student_code),
+              qrCode,
+            ].join(',')
+          );
+        }
+      }
+
+      // Add UTF-8 BOM for better Chinese display in spreadsheet tools.
+      const csv = `\uFEFF${rows.join('\n')}`;
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${classItem.name}-二维码码表.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Export class codes error:', error);
+      alert('导出失败，请重试');
+    }
+  }
+
   // 创建科目
   async function handleCreateSubject() {
     if (!newSubjectName.trim() || !selectedClassId) return;
@@ -102,6 +202,32 @@ export default function SettingsPage() {
     } catch (error) {
       console.error('Create subject error:', error);
       alert('创建科目失败');
+    }
+  }
+
+  async function handleEditSubject(subject: Subject) {
+    const name = window.prompt('请输入新的科目名称', subject.name);
+    if (!name || !name.trim() || name.trim() === subject.name || !selectedClassId) return;
+    try {
+      await updateSubject(subject.id, { name: name.trim() });
+      const subjectsData = await getSubjectsByClass(selectedClassId);
+      setSubjects(subjectsData);
+    } catch (error) {
+      console.error('Update subject error:', error);
+      alert('修改科目失败');
+    }
+  }
+
+  async function handleDeleteSubject(subject: Subject) {
+    if (!window.confirm(`确认删除科目「${subject.name}」？`)) return;
+    if (!selectedClassId) return;
+    try {
+      await deleteSubject(subject.id);
+      const subjectsData = await getSubjectsByClass(selectedClassId);
+      setSubjects(subjectsData);
+    } catch (error) {
+      console.error('Delete subject error:', error);
+      alert('删除科目失败');
     }
   }
 
@@ -118,6 +244,39 @@ export default function SettingsPage() {
     } catch (error) {
       console.error('Create student error:', error);
       alert('创建学生失败');
+    }
+  }
+
+  async function handleEditStudent(student: Student) {
+    if (!selectedClassId) return;
+    const name = window.prompt('请输入新的学生姓名', student.name);
+    if (!name || !name.trim()) return;
+    const studentCode = window.prompt('请输入新的学号', student.student_code);
+    if (!studentCode || !studentCode.trim()) return;
+
+    try {
+      await updateStudent(student.id, {
+        name: name.trim(),
+        student_code: studentCode.trim(),
+      });
+      const studentsData = await getStudentsByClass(selectedClassId);
+      setStudents(studentsData);
+    } catch (error) {
+      console.error('Update student error:', error);
+      alert('修改学生失败');
+    }
+  }
+
+  async function handleDeleteStudent(student: Student) {
+    if (!window.confirm(`确认删除学生「${student.name}」？`)) return;
+    if (!selectedClassId) return;
+    try {
+      await deleteStudent(student.id);
+      const studentsData = await getStudentsByClass(selectedClassId);
+      setStudents(studentsData);
+    } catch (error) {
+      console.error('Delete student error:', error);
+      alert('删除学生失败');
     }
   }
 
@@ -194,6 +353,14 @@ export default function SettingsPage() {
                     onKeyDown={(e) => e.key === 'Enter' && handleCreateClass()}
                   />
                   <Button onClick={handleCreateClass}>添加班级</Button>
+                  <Button
+                    variant="outline"
+                    onClick={handleExportClassCodes}
+                    disabled={!selectedClassId}
+                  >
+                    <Download className="h-4 w-4 mr-1" />
+                    导出当前班级码表
+                  </Button>
                 </div>
                 
                 {/* 班级列表 */}
@@ -209,13 +376,29 @@ export default function SettingsPage() {
                         <span className="text-xl">🏫</span>
                         <span className="font-medium">{classItem.name}</span>
                       </div>
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => setSelectedClassId(classItem.id)}
-                      >
-                        {selectedClassId === classItem.id ? '已选中' : '选择'}
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setSelectedClassId(classItem.id)}
+                        >
+                          {selectedClassId === classItem.id ? '已选中' : '选择'}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleEditClass(classItem)}
+                        >
+                          编辑
+                        </Button>
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => handleDeleteClass(classItem)}
+                        >
+                          删除
+                        </Button>
+                      </div>
                     </div>
                   ))}
                   
@@ -259,10 +442,20 @@ export default function SettingsPage() {
                       {subjects.map((subject) => (
                         <div 
                           key={subject.id}
-                          className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg border"
+                          className="flex items-center justify-between gap-3 p-3 bg-gray-50 rounded-lg border"
                         >
-                          <span className="text-2xl">📚</span>
-                          <span className="font-medium">{subject.name}</span>
+                          <div className="flex items-center gap-3">
+                            <span className="text-2xl">📚</span>
+                            <span className="font-medium">{subject.name}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button variant="outline" size="sm" onClick={() => handleEditSubject(subject)}>
+                              编辑
+                            </Button>
+                            <Button variant="destructive" size="sm" onClick={() => handleDeleteSubject(subject)}>
+                              删除
+                            </Button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -309,16 +502,38 @@ export default function SettingsPage() {
                     </div>
                     
                     {/* 学生列表 */}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       {students.map((student) => (
                         <div 
                           key={student.id}
-                          className="flex items-center gap-2 p-3 bg-gray-50 rounded-lg border"
+                          className="flex items-center justify-between gap-2 p-3 bg-gray-50 rounded-lg border"
                         >
-                          <span className="text-xl">👤</span>
-                          <div className="min-w-0">
-                            <p className="font-medium truncate">{student.name}</p>
-                            <p className="text-xs text-gray-500">{student.student_code}</p>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-xl">👤</span>
+                            <div className="min-w-0">
+                              <p className="font-medium truncate">{student.name}</p>
+                              <p className="text-xs text-gray-500">{student.student_code}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              onClick={() => handleEditStudent(student)}
+                              aria-label={`编辑${student.name}`}
+                              title="编辑"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="destructive"
+                              size="icon"
+                              onClick={() => handleDeleteStudent(student)}
+                              aria-label={`删除${student.name}`}
+                              title="删除"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
                           </div>
                         </div>
                       ))}

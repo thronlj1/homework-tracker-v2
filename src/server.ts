@@ -1,6 +1,7 @@
 import { createServer } from 'http';
 import { parse } from 'url';
 import next from 'next';
+import { startHomeworkDeadlineJob } from '@/lib/homework-deadline-job';
 
 const dev = process.env.COZE_PROJECT_ENV !== 'PROD';
 const hostname = process.env.HOSTNAME || 'localhost';
@@ -11,6 +12,9 @@ const app = next({ dev, hostname, port });
 const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
+  const appBaseUrl = process.env.APP_BASE_URL || `http://${hostname}:${port}`;
+  startHomeworkDeadlineJob(appBaseUrl);
+
   const server = createServer(async (req, res) => {
     try {
       const parsedUrl = parse(req.url!, true);
