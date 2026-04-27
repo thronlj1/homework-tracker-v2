@@ -79,6 +79,7 @@ create table if not exists public.system_configs (
   scan_end_time varchar(5) not null default '12:00',
   alert_continuous_days int not null default 3,
   reminder_broadcast_times int not null default 1,
+  student_reminder_voice_enabled boolean not null default true,
   global_task_status varchar(20) not null default 'semester',
   today_override_date varchar(10),
   today_override_status varchar(20) default 'auto',
@@ -88,6 +89,9 @@ create table if not exists public.system_configs (
 
 alter table public.system_configs
 add column if not exists reminder_broadcast_times int not null default 1;
+
+alter table public.system_configs
+add column if not exists student_reminder_voice_enabled boolean not null default true;
 
 -- Upgrade path: ensure duplicate submissions are prevented at DB level.
 drop index if exists public.homework_records_unique_idx;

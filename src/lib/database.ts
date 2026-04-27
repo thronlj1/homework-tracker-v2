@@ -454,6 +454,7 @@ export async function createSystemConfig(config: {
   scan_end_time?: string;
   alert_continuous_days?: number;
   reminder_broadcast_times?: number;
+  student_reminder_voice_enabled?: boolean;
   global_task_status?: 'semester' | 'vacation';
 }): Promise<SystemConfig> {
   if (isBrowser) {
@@ -510,6 +511,7 @@ export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus>
     scan_end_time: '12:00',
     alert_continuous_days: 3,
     reminder_broadcast_times: 1,
+    student_reminder_voice_enabled: true,
     global_task_status: 'semester',
     today_override_date: null,
     today_override_status: 'auto',
@@ -607,7 +609,8 @@ export async function getClassStats(classId: number, date: string): Promise<Clas
     const exempted = subjectExemptions.length;
     const total = students.length;
     const notSubmitted = total - submitted - exempted;
-    const percentage = total > 0 ? Math.round((submitted / total) * 100) : 0;
+    const completed = submitted + exempted;
+    const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
     
     return {
       subject_id: subject.id,

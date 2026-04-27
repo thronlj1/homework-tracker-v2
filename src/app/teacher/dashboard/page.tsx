@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { getClassById, getClassStats, getStudentStatuses, checkStudentWarnings, createExemption, deleteHomeworkRecord, getTodayDate } from '@/lib/database';
-import type { Class, ClassStats, StudentStatus, Subject } from '@/types/database';
+import type { Class, ClassStats, StudentStatus } from '@/types/database';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -11,6 +11,8 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
+import { Toaster, toast } from 'sonner';
 
 function DashboardContent() {
   const router = useRouter();
@@ -33,6 +35,8 @@ function DashboardContent() {
   );
   const [exemptDialogOpen, setExemptDialogOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<StudentStatus | null>(null);
+  const [teacherReminderVoiceEnabled, setTeacherReminderVoiceEnabled] = useState(true);
+  const [voiceToggleSaving, setVoiceToggleSaving] = useState(false);
   const latestStatusRequestRef = useRef(0);
 
   const today = getTodayDate();
@@ -123,11 +127,51 @@ function DashboardContent() {
     loadStudentStatuses(selectedSubject);
   }, [selectedSubject, stats, loadStudentStatuses]);
 
+  const loadReminderVoiceToggle = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/reminder/voice?classId=${classId}`, { cache: 'no-store' });
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) return;
+      setTeacherReminderVoiceEnabled(Boolean(payload?.data?.enabled));
+    } catch {
+      // Ignore toggle loading errors.
+    }
+  }, [classId]);
+
+  useEffect(() => {
+    if (!classId) return;
+    void loadReminderVoiceToggle();
+  }, [classId, loadReminderVoiceToggle]);
+
   // 刷新数据
   async function handleRefresh() {
     await loadStats();
     if (selectedSubject) {
       await loadStudentStatuses(selectedSubject);
+    }
+    await loadReminderVoiceToggle();
+  }
+
+  async function handleToggleReminderVoice(nextEnabled: boolean) {
+    const previous = teacherReminderVoiceEnabled;
+    setTeacherReminderVoiceEnabled(nextEnabled);
+    setVoiceToggleSaving(true);
+    try {
+      const response = await fetch('/api/reminder/voice', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ classId, enabled: nextEnabled }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.message || '更新失败');
+      }
+      toast.success(nextEnabled ? '已开启学生端教师提醒语音' : '已关闭学生端教师提醒语音');
+    } catch {
+      setTeacherReminderVoiceEnabled(previous);
+      toast.error('语音开关更新失败，请重试');
+    } finally {
+      setVoiceToggleSaving(false);
     }
   }
 
@@ -154,7 +198,7 @@ function DashboardContent() {
         message: `${subjectStats.subject_name}还有 ${notSubmitted.length} 位同学未交：${names}。请尽快提交。`,
       }),
     });
-    alert(`已发送${subjectStats.subject_name}催交提醒（${notSubmitted.length} 人未交）`);
+    toast.success(`已发送${subjectStats.subject_name}催交提醒（${notSubmitted.length} 人未交）`);
   }
 
   function escapeCsvCell(value: string): string {
@@ -281,9 +325,19 @@ function DashboardContent() {
                 <p className="text-sm text-gray-500">{today}</p>
               </div>
             </div>
-            <Button onClick={handleRefresh} variant="outline" size="sm">
-              🔄 刷新
-            </Button>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 rounded-lg border px-3 py-1.5 bg-white">
+                <span className="text-xs text-gray-600">学生端教师提醒语音</span>
+                <Switch
+                  checked={teacherReminderVoiceEnabled}
+                  onCheckedChange={handleToggleReminderVoice}
+                  disabled={voiceToggleSaving}
+                />
+              </div>
+              <Button onClick={handleRefresh} variant="outline" size="sm">
+                🔄 刷新
+              </Button>
+            </div>
           </div>
         </div>
       </header>
@@ -305,7 +359,7 @@ function DashboardContent() {
                   <p className="text-xs text-gray-500 mb-1">{subject.subject_name}</p>
                   <p className="text-xl font-bold text-purple-600">{subject.percentage}%</p>
                   <p className="text-[11px] text-gray-400 mt-1">
-                    {subject.submitted}/{subject.total}
+                    {subject.submitted + subject.exempted}/{subject.total}
                   </p>
                   <Button
                     size="sm"
@@ -510,6 +564,7 @@ function DashboardContent() {
           </TabsContent>
         </Tabs>
       </main>
+      <Toaster position="top-center" richColors />
     </div>
   );
 }

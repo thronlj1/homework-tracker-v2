@@ -28,9 +28,10 @@ function ScannerContent() {
   const [reminderId, setReminderId] = useState<string | null>(null);
   const [dismissedReminderId, setDismissedReminderId] = useState<string | null>(null);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [reminderBroadcastTimes, setReminderBroadcastTimes] = useState(1);
   const [reminderChannelStatus, setReminderChannelStatus] = useState<'sse' | 'polling'>('polling');
   const lastPlayedReminderIdRef = useRef<string | null>(null);
+  const reminderBroadcastTimesRef = useRef(1);
+  const teacherReminderVoiceEnabledRef = useRef(true);
   const reminderQueueRef = useRef<Array<{ id: string; message: string; times: number }>>([]);
   const processingReminderQueueRef = useRef(false);
   const queuedReminderIdsRef = useRef(new Set<string>());
@@ -156,7 +157,7 @@ function ScannerContent() {
           playSound('reminder');
           await speakTextOnce(`老师提醒：${task.message}`);
           if (i < task.times - 1) {
-            await new Promise((resolve) => window.setTimeout(resolve, 1200));
+            await new Promise((resolve) => window.setTimeout(resolve, 400));
           }
         }
 
@@ -168,7 +169,7 @@ function ScannerContent() {
   }, [playSound, speakTextOnce]);
 
   const handleIncomingReminder = useCallback(
-    (record: { id?: string; message?: string } | null | undefined) => {
+    (record: { id?: string; message?: string; updatedAt?: number } | null | undefined) => {
       if (!record?.id || !record.message) return;
       if (record.id === dismissedReminderId) return;
 
@@ -177,7 +178,9 @@ function ScannerContent() {
 
       if (lastPlayedReminderIdRef.current !== record.id && !queuedReminderIdsRef.current.has(record.id)) {
         lastPlayedReminderIdRef.current = record.id;
-        const times = Math.max(1, Math.min(5, reminderBroadcastTimes));
+        if (!teacherReminderVoiceEnabledRef.current) return;
+
+        const times = Math.max(1, Math.min(5, reminderBroadcastTimesRef.current));
         reminderQueueRef.current.push({
           id: record.id,
           message: record.message,
@@ -187,8 +190,20 @@ function ScannerContent() {
         void processReminderQueue();
       }
     },
-    [dismissedReminderId, processReminderQueue, reminderBroadcastTimes]
+    [dismissedReminderId, processReminderQueue]
   );
+
+  const refreshReminderBroadcastTimes = useCallback(async () => {
+    if (!classId) return;
+    try {
+      const configData = await getSystemConfig(classId);
+      const times = Math.max(1, Math.min(5, configData?.reminder_broadcast_times ?? 1));
+      reminderBroadcastTimesRef.current = times;
+      teacherReminderVoiceEnabledRef.current = configData?.student_reminder_voice_enabled ?? true;
+    } catch {
+      // Ignore config refresh failures.
+    }
+  }, [classId]);
 
   // 处理扫码输入
   const handleScanInput = useCallback(async (value: string) => {
@@ -297,9 +312,9 @@ function ScannerContent() {
         
         setClassInfo(classData);
         setTimeGuard(guardStatus);
-        setReminderBroadcastTimes(
-          Math.max(1, Math.min(5, configData?.reminder_broadcast_times ?? 1))
-        );
+        const times = Math.max(1, Math.min(5, configData?.reminder_broadcast_times ?? 1));
+        reminderBroadcastTimesRef.current = times;
+        teacherReminderVoiceEnabledRef.current = configData?.student_reminder_voice_enabled ?? true;
       } catch (error) {
         console.error('Load data error:', error);
       } finally {
@@ -316,6 +331,14 @@ function ScannerContent() {
       }
     };
   }, [classId, router]);
+
+  useEffect(() => {
+    if (!classId) return;
+    const timer = window.setInterval(() => {
+      void refreshReminderBroadcastTimes();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [classId, refreshReminderBroadcastTimes]);
 
   // 聚焦隐藏的输入框
   useEffect(() => {

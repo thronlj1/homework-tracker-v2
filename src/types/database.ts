@@ -55,6 +55,7 @@ export interface SystemConfig {
   scan_end_time: string;
   alert_continuous_days: number;
   reminder_broadcast_times: number;
+  student_reminder_voice_enabled: boolean;
   global_task_status: 'semester' | 'vacation';
   today_override_date: string | null;
   today_override_status: 'auto' | 'force_open' | 'force_close';
