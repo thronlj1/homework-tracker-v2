@@ -29,6 +29,7 @@ function ScannerContent() {
   const [dismissedReminderId, setDismissedReminderId] = useState<string | null>(null);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [reminderBroadcastTimes, setReminderBroadcastTimes] = useState(1);
+  const [reminderChannelStatus, setReminderChannelStatus] = useState<'sse' | 'polling'>('polling');
   const lastPlayedReminderIdRef = useRef<string | null>(null);
   const reminderQueueRef = useRef<Array<{ id: string; message: string; times: number }>>([]);
   const processingReminderQueueRef = useRef(false);
@@ -346,6 +347,7 @@ function ScannerContent() {
 
     eventSource.addEventListener('ready', () => {
       sseConnectedRef.current = true;
+      setReminderChannelStatus('sse');
     });
 
     eventSource.addEventListener('reminder', (event) => {
@@ -359,6 +361,7 @@ function ScannerContent() {
 
     eventSource.onerror = () => {
       sseConnectedRef.current = false;
+      setReminderChannelStatus('polling');
       if (!closedByCleanup) {
         eventSource.close();
       }
@@ -367,6 +370,7 @@ function ScannerContent() {
     return () => {
       closedByCleanup = true;
       sseConnectedRef.current = false;
+      setReminderChannelStatus('polling');
       eventSource.close();
     };
   }, [classId, handleIncomingReminder]);
@@ -385,6 +389,7 @@ function ScannerContent() {
           cache: 'no-store',
         });
         if (!response.ok || cancelled) return;
+        setReminderChannelStatus('polling');
         const payload = await response.json();
         const record = payload?.data as { id?: string; message?: string } | null;
         handleIncomingReminder(record);
@@ -643,6 +648,16 @@ function ScannerContent() {
             <span>等待扫码</span>
           </div>
           <div className="flex items-center gap-4">
+            <div className="flex items-center gap-1.5">
+              <span
+                className={`inline-block w-2 h-2 rounded-full ${
+                  reminderChannelStatus === 'sse' ? 'bg-green-500' : 'bg-amber-500'
+                }`}
+              />
+              <span className="text-xs text-gray-600">
+                {reminderChannelStatus === 'sse' ? '提醒通道：实时连接' : '提醒通道：轮询兜底'}
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               <Switch
                 id="voice-switch"
