@@ -12,7 +12,7 @@ interface SupabaseCredentials {
 }
 
 async function loadEnv(): Promise<void> {
-  if (envLoaded || (process.env.COZE_SUPABASE_URL && process.env.COZE_SUPABASE_ANON_KEY)) {
+  if (envLoaded || (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY)) {
     return;
   }
 
@@ -29,7 +29,7 @@ async function loadEnv(): Promise<void> {
     try {
       const dotenv = await import('dotenv');
       dotenv.config();
-      if (process.env.COZE_SUPABASE_URL && process.env.COZE_SUPABASE_ANON_KEY) {
+      if (process.env.SUPABASE_URL && process.env.SUPABASE_ANON_KEY) {
         envLoaded = true;
         return;
       }
@@ -89,15 +89,14 @@ except Exception as e:
 async function getSupabaseCredentials(): Promise<SupabaseCredentials> {
   await loadEnv();
 
-  const isBrowser = typeof window !== 'undefined';
-
-  // Server side prefers COZE_* variables; browser must use NEXT_PUBLIC_*.
-  const url = isBrowser
-    ? (process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.COZE_SUPABASE_URL)
-    : (process.env.COZE_SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL);
-  const anonKey = isBrowser
-    ? (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.COZE_SUPABASE_ANON_KEY)
-    : (process.env.COZE_SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
+  // 兼容多种命名格式：SUPABASE_*, NEXT_PUBLIC_*, COZE_*
+  const url = process.env.SUPABASE_URL 
+    || process.env.NEXT_PUBLIC_SUPABASE_URL 
+    || process.env.COZE_SUPABASE_URL;
+  const anonKey = process.env.SUPABASE_ANON_KEY 
+    || process.env.SUPABASE_PUBLISHABLE_KEY 
+    || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY 
+    || process.env.COZE_SUPABASE_ANON_KEY;
 
   if (!url) {
     throw new Error('Supabase URL is not set');
@@ -111,7 +110,7 @@ async function getSupabaseCredentials(): Promise<SupabaseCredentials> {
 
 async function getSupabaseServiceRoleKey(): Promise<string | undefined> {
   await loadEnv();
-  return process.env.COZE_SUPABASE_SERVICE_ROLE_KEY;
+  return process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.COZE_SUPABASE_SERVICE_ROLE_KEY;
 }
 
 // 客户端实例缓存
@@ -168,14 +167,14 @@ export async function getSupabaseClient(token?: string): Promise<SupabaseClient>
 
 // 保留同步版本以兼容旧代码（仅服务端）
 export function getSupabaseClientSync(token?: string): SupabaseClient {
-  const url = process.env.COZE_SUPABASE_URL;
-  const anonKey = process.env.COZE_SUPABASE_ANON_KEY;
+  const url = process.env.SUPABASE_URL || process.env.COZE_SUPABASE_URL;
+  const anonKey = process.env.SUPABASE_ANON_KEY || process.env.COZE_SUPABASE_ANON_KEY;
 
   if (!url || !anonKey) {
     throw new Error('Supabase credentials not available');
   }
 
-  const key = token ? anonKey : (process.env.COZE_SUPABASE_SERVICE_ROLE_KEY ?? anonKey);
+  const key = token ? anonKey : ((process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.COZE_SUPABASE_SERVICE_ROLE_KEY) ?? anonKey);
 
   if (token) {
     return createClient(url, key, {
