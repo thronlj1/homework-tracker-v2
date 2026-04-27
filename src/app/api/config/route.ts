@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSystemConfig, updateSystemConfig, createSystemConfig } from '@/lib/database';
+import { requireAdmin } from '@/lib/admin-auth';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const config = await getSystemConfig();
+    const { searchParams } = new URL(request.url);
+    const classId = searchParams.get('classId');
+    const config = await getSystemConfig(classId ? parseInt(classId, 10) : undefined);
     return NextResponse.json({ success: true, data: config });
   } catch (error) {
     console.error('Get config error:', error);
@@ -16,6 +19,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    const authResponse = requireAdmin(request);
+    if (authResponse) return authResponse;
+
     const updates = await request.json();
     
     const existingConfig = await getSystemConfig();

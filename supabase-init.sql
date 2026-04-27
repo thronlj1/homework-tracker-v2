@@ -53,7 +53,7 @@ create index if not exists homework_records_class_id_idx on public.homework_reco
 create index if not exists homework_records_student_id_idx on public.homework_records(student_id);
 create index if not exists homework_records_subject_id_idx on public.homework_records(subject_id);
 create index if not exists homework_records_submit_date_idx on public.homework_records(submit_date);
-create index if not exists homework_records_unique_idx on public.homework_records(student_id, subject_id, submit_date);
+create unique index if not exists homework_records_unique_idx on public.homework_records(student_id, subject_id, submit_date);
 
 create table if not exists public.homework_exemptions (
   id bigint generated always as identity primary key,
@@ -78,12 +78,21 @@ create table if not exists public.system_configs (
   scan_start_time varchar(5) not null default '07:00',
   scan_end_time varchar(5) not null default '12:00',
   alert_continuous_days int not null default 3,
+  reminder_broadcast_times int not null default 1,
   global_task_status varchar(20) not null default 'semester',
   today_override_date varchar(10),
   today_override_status varchar(20) default 'auto',
   created_at timestamptz not null default now(),
   updated_at timestamptz
 );
+
+alter table public.system_configs
+add column if not exists reminder_broadcast_times int not null default 1;
+
+-- Upgrade path: ensure duplicate submissions are prevented at DB level.
+drop index if exists public.homework_records_unique_idx;
+create unique index if not exists homework_records_unique_idx
+on public.homework_records(student_id, subject_id, submit_date);
 
 create index if not exists system_configs_class_id_idx on public.system_configs(class_id);
 

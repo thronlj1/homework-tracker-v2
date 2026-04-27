@@ -23,6 +23,11 @@ export default function SettingsPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [config, setConfig] = useState<SystemConfig | null>(null);
   const [loading, setLoading] = useState(true);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [adminUsername, setAdminUsername] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [authSubmitting, setAuthSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState('classes');
 
   // 表单状态
@@ -32,8 +37,18 @@ export default function SettingsPage() {
   const [newStudentCode, setNewStudentCode] = useState('');
 
   useEffect(() => {
-    loadData();
+    checkAdminSession();
   }, []);
+
+  useEffect(() => {
+    if (authenticated) {
+      loadData();
+      return;
+    }
+    if (!authChecking) {
+      setLoading(false);
+    }
+  }, [authenticated, authChecking]);
 
   async function loadData() {
     try {
@@ -56,10 +71,61 @@ export default function SettingsPage() {
     }
   }
 
+  async function checkAdminSession() {
+    try {
+      setAuthChecking(true);
+      const response = await fetch('/api/admin/session', { cache: 'no-store' });
+      const payload = await response.json();
+      setAuthenticated(Boolean(payload?.data?.authenticated));
+    } catch {
+      setAuthenticated(false);
+    } finally {
+      setAuthChecking(false);
+    }
+  }
+
+  async function handleAdminLogin() {
+    if (!adminUsername.trim() || !adminPassword.trim()) {
+      alert('请输入管理员账号和密码');
+      return;
+    }
+    try {
+      setAuthSubmitting(true);
+      const response = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: adminUsername.trim(),
+          password: adminPassword,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.message || '登录失败');
+      }
+      setAuthenticated(true);
+      setAdminPassword('');
+      await loadData();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : '登录失败');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  }
+
+  async function handleAdminLogout() {
+    await fetch('/api/admin/logout', { method: 'POST' });
+    setAuthenticated(false);
+    setClasses([]);
+    setSubjects([]);
+    setStudents([]);
+    setConfig(null);
+  }
+
   // 加载班级相关数据
   useEffect(() => {
     async function loadClassData() {
-      if (!selectedClassId) return;
+      if (!authenticated || !selectedClassId) return;
       
       try {
         const [subjectsData, studentsData] = await Promise.all([
@@ -75,7 +141,7 @@ export default function SettingsPage() {
     }
     
     loadClassData();
-  }, [selectedClassId]);
+  }, [selectedClassId, authenticated]);
 
   // 创建班级
   async function handleCreateClass() {
@@ -307,6 +373,50 @@ export default function SettingsPage() {
     );
   }
 
+  if (!authenticated) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-4">
+        <div className="max-w-md mx-auto pt-16">
+          <Card>
+            <CardHeader>
+              <CardTitle>管理员登录</CardTitle>
+              <CardDescription>请输入管理员账号和密码后再进入系统设置</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="admin-username">管理员账号</Label>
+                <Input
+                  id="admin-username"
+                  value={adminUsername}
+                  onChange={(e) => setAdminUsername(e.target.value)}
+                  placeholder="例如：admin"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="admin-password">管理员密码</Label>
+                <Input
+                  id="admin-password"
+                  type="password"
+                  value={adminPassword}
+                  onChange={(e) => setAdminPassword(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !authSubmitting) {
+                      handleAdminLogin();
+                    }
+                  }}
+                  placeholder="请输入密码"
+                />
+              </div>
+              <Button onClick={handleAdminLogin} className="w-full" disabled={authSubmitting}>
+                {authSubmitting ? '登录中...' : '登录并进入设置'}
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* 顶部导航 */}
@@ -323,6 +433,9 @@ export default function SettingsPage() {
               <h1 className="text-xl font-bold text-gray-900">系统设置</h1>
               <p className="text-sm text-gray-500">管理班级、科目、学生和系统配置</p>
             </div>
+            <Button variant="outline" size="sm" onClick={handleAdminLogout}>
+              退出管理员
+            </Button>
           </div>
         </div>
       </header>
@@ -626,6 +739,26 @@ export default function SettingsPage() {
                   />
                   <p className="text-xs text-gray-500">
                     连续 N 天未交作业的学生将被标记为预警
+                  </p>
+                </div>
+
+                {/* 催交播报次数 */}
+                <div className="space-y-2">
+                  <Label>教师催交播报次数</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={5}
+                    value={config?.reminder_broadcast_times ?? 1}
+                    onChange={(e) => {
+                      const parsed = parseInt(e.target.value, 10);
+                      if (!Number.isFinite(parsed)) return;
+                      const times = Math.max(1, Math.min(5, parsed));
+                      handleUpdateConfig({ reminder_broadcast_times: times });
+                    }}
+                  />
+                  <p className="text-xs text-gray-500">
+                    学生端收到教师催交时的语音播报次数，默认 1 次，最多 5 次
                   </p>
                 </div>
               </CardContent>

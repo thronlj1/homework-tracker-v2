@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStudentsByClass, createStudent, getStudentById } from '@/lib/database';
+import { requireAdmin } from '@/lib/admin-auth';
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,6 +27,9 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const authResponse = requireAdmin(request);
+    if (authResponse) return authResponse;
+
     const { classId, name, studentCode, avatarImage } = await request.json();
     
     if (!classId || !name || !studentCode) {
@@ -53,6 +57,9 @@ export async function POST(request: NextRequest) {
 
 export async function PUT(request: NextRequest) {
   try {
+    const authResponse = requireAdmin(request);
+    if (authResponse) return authResponse;
+
     const { id, updates } = await request.json();
     if (!id || !updates) {
       return NextResponse.json({
@@ -74,6 +81,9 @@ export async function PUT(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
+    const authResponse = requireAdmin(request);
+    if (authResponse) return authResponse;
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     if (!id) {

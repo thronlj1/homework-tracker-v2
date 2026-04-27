@@ -54,6 +54,7 @@ export interface SystemConfig {
   scan_start_time: string;
   scan_end_time: string;
   alert_continuous_days: number;
+  reminder_broadcast_times: number;
   global_task_status: 'semester' | 'vacation';
   today_override_date: string | null;
   today_override_status: 'auto' | 'force_open' | 'force_close';
@@ -104,5 +105,6 @@ export interface StudentStatus {
   student_name: string;
   student_code: string;
   status: 'submitted' | 'not_submitted' | 'exempted';
+  record_id?: number;
   submit_time?: string;
 }

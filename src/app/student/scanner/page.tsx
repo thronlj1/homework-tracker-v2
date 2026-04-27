@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { checkTimeGuard, getClassById } from '@/lib/database';
+import { checkTimeGuard, getClassById, getSystemConfig } from '@/lib/database';
 import type { Class, TimeGuardStatus, SubmitResult } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -29,6 +29,7 @@ function ScannerContent() {
   const [reminderId, setReminderId] = useState<string | null>(null);
   const [dismissedReminderId, setDismissedReminderId] = useState<string | null>(null);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [reminderBroadcastTimes, setReminderBroadcastTimes] = useState(1);
   const lastPlayedReminderIdRef = useRef<string | null>(null);
 
   const parsedReminder = (() => {
@@ -94,13 +95,15 @@ function ScannerContent() {
   }, []);
 
   const speakText = useCallback(
-    (text: string) => {
+    (text: string, options?: { cancelPrevious?: boolean }) => {
       if (!voiceEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) return;
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.lang = 'zh-CN';
       utterance.rate = 1;
       utterance.pitch = 1;
-      window.speechSynthesis.cancel();
+      if (options?.cancelPrevious !== false) {
+        window.speechSynthesis.cancel();
+      }
       window.speechSynthesis.speak(utterance);
     },
     [voiceEnabled]
@@ -204,6 +207,7 @@ function ScannerContent() {
           getClassById(classId),
           checkTimeGuard(classId),
         ]);
+        const configData = await getSystemConfig(classId);
         
         if (!classData) {
           router.push('/student');
@@ -212,6 +216,9 @@ function ScannerContent() {
         
         setClassInfo(classData);
         setTimeGuard(guardStatus);
+        setReminderBroadcastTimes(
+          Math.max(1, Math.min(5, configData?.reminder_broadcast_times ?? 1))
+        );
       } catch (error) {
         console.error('Load data error:', error);
       } finally {
@@ -271,8 +278,13 @@ function ScannerContent() {
         setReminderText(record.message);
         if (lastPlayedReminderIdRef.current !== record.id) {
           lastPlayedReminderIdRef.current = record.id;
-          playSound('reminder');
-          speakText(`老师提醒：${record.message}`);
+          const times = Math.max(1, Math.min(5, reminderBroadcastTimes));
+          for (let i = 0; i < times; i++) {
+            window.setTimeout(() => {
+              playSound('reminder');
+              speakText(`老师提醒：${record.message}`, { cancelPrevious: i === 0 });
+            }, i * 1600);
+          }
         }
       } catch {
         // Ignore reminder polling failures.
@@ -286,7 +298,7 @@ function ScannerContent() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [classId, dismissedReminderId, playSound, speakText]);
+  }, [classId, dismissedReminderId, playSound, speakText, reminderBroadcastTimes]);
 
   // 提醒自动关闭（显示 1 分钟）
   useEffect(() => {

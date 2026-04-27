@@ -403,8 +403,9 @@ export async function deleteExemption(id: number): Promise<void> {
 // ==================== 系统配置操作 ====================
 
 export async function getSystemConfig(classId?: number): Promise<SystemConfig | null> {
-  if (isBrowser && !classId) {
-    return apiRequest<SystemConfig | null>('/api/config');
+  if (isBrowser) {
+    const query = classId ? `?classId=${classId}` : '';
+    return apiRequest<SystemConfig | null>(`/api/config${query}`);
   }
   const client = await getSupabaseClient();
   
@@ -452,6 +453,7 @@ export async function createSystemConfig(config: {
   scan_start_time?: string;
   scan_end_time?: string;
   alert_continuous_days?: number;
+  reminder_broadcast_times?: number;
   global_task_status?: 'semester' | 'vacation';
 }): Promise<SystemConfig> {
   if (isBrowser) {
@@ -507,6 +509,7 @@ export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus>
     scan_start_time: '07:00',
     scan_end_time: '12:00',
     alert_continuous_days: 3,
+    reminder_broadcast_times: 1,
     global_task_status: 'semester',
     today_override_date: null,
     today_override_status: 'auto',
@@ -631,7 +634,7 @@ export async function getStudentStatuses(
 ): Promise<StudentStatus[]> {
   if (isBrowser) {
     const result = await apiRequest<{ studentStatuses: StudentStatus[] | null }>(
-      `/api/stats?classId=${classId}&subjectId=${subjectId}&date=${date}`
+      `/api/stats?classId=${classId}&subjectId=${subjectId}&date=${date}&includeWarnings=0`
     );
     return result.studentStatuses || [];
   }
@@ -657,6 +660,7 @@ export async function getStudentStatuses(
         student_name: student.name,
         student_code: student.student_code,
         status: 'submitted' as const,
+        record_id: record.id,
         submit_time: record.submit_time,
       };
     }
@@ -745,6 +749,16 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
       subject,
     };
   } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (/23505|duplicate key|unique/i.test(message)) {
+      return {
+        success: false,
+        message: '请勿重复提交',
+        type: 'duplicate',
+        student,
+        subject,
+      };
+    }
     return {
       success: false,
       message: '提交失败，请重试',
@@ -762,7 +776,7 @@ export async function checkStudentWarnings(
 ): Promise<number[]> {
   if (isBrowser) {
     const result = await apiRequest<{ warningStudents: number[] }>(
-      `/api/stats?classId=${classId}&subjectId=${subjectId}&date=${getTodayDate()}`
+      `/api/stats?classId=${classId}&subjectId=${subjectId}&date=${getTodayDate()}&includeStatuses=0&includeWarnings=1`
     );
     return result.warningStudents || [];
   }
