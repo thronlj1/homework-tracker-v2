@@ -39,6 +39,7 @@ function getKeySource(isBrowser: boolean): string {
 
 function logSupabaseEnvDiagnostics(isBrowser: boolean, url?: string, anonKey?: string): void {
   if (isBrowser) return;
+  const serviceRoleKey = getServerSupabaseServiceRoleKey();
   console.error(
     '[supabase-env] diagnostics',
     JSON.stringify({
@@ -46,7 +47,9 @@ function logSupabaseEnvDiagnostics(isBrowser: boolean, url?: string, anonKey?: s
       keySource: getKeySource(isBrowser),
       urlMasked: maskSecret(url),
       keyMasked: maskSecret(anonKey),
-      hasServiceRoleKey: Boolean(getServerSupabaseServiceRoleKey()),
+      hasServiceRoleKey: Boolean(serviceRoleKey),
+      useServiceRole: shouldUseServiceRoleKey(),
+      serviceRoleMasked: maskSecret(serviceRoleKey),
     })
   );
 }
@@ -61,6 +64,10 @@ function getServerSupabaseAnonKey(): string | undefined {
 
 function getServerSupabaseServiceRoleKey(): string | undefined {
   return process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.COZE_SUPABASE_SERVICE_ROLE_KEY;
+}
+
+function shouldUseServiceRoleKey(): boolean {
+  return process.env.SUPABASE_USE_SERVICE_ROLE === '1';
 }
 
 async function loadEnv(): Promise<void> {
@@ -173,7 +180,10 @@ export async function getSupabaseClient(token?: string): Promise<SupabaseClient>
   }
 
   const { url, anonKey } = await getSupabaseCredentials();
-  const key = token ? anonKey : ((await getSupabaseServiceRoleKey()) ?? anonKey);
+  let key = anonKey;
+  if (!token && shouldUseServiceRoleKey()) {
+    key = (await getSupabaseServiceRoleKey()) ?? anonKey;
+  }
 
   if (token) {
     return createClient(url, key, {
@@ -198,7 +208,10 @@ export function getSupabaseClientSync(token?: string): SupabaseClient {
     throw new Error('Supabase credentials not available');
   }
 
-  const key = token ? anonKey : (getServerSupabaseServiceRoleKey() ?? anonKey);
+  let key = anonKey;
+  if (!token && shouldUseServiceRoleKey()) {
+    key = getServerSupabaseServiceRoleKey() ?? anonKey;
+  }
   if (token) {
     return createClient(url, key, {
       global: { headers: { Authorization: `Bearer ${token}` } },
