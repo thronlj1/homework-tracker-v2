@@ -6,7 +6,6 @@ import { checkTimeGuard, getClassById, getSystemConfig } from '@/lib/database';
 import type { Class, TimeGuardStatus, SubmitResult } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
 
 function ScannerContent() {
@@ -31,6 +30,9 @@ function ScannerContent() {
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [reminderBroadcastTimes, setReminderBroadcastTimes] = useState(1);
   const lastPlayedReminderIdRef = useRef<string | null>(null);
+  const reminderQueueRef = useRef<Array<{ id: string; message: string; times: number }>>([]);
+  const processingReminderQueueRef = useRef(false);
+  const queuedReminderIdsRef = useRef(new Set<string>());
 
   const parsedReminder = (() => {
     if (!reminderText) return null;
@@ -109,6 +111,60 @@ function ScannerContent() {
     [voiceEnabled]
   );
 
+  const speakTextOnce = useCallback(
+    (text: string) =>
+      new Promise<void>((resolve) => {
+        if (!voiceEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+          resolve();
+          return;
+        }
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-CN';
+        utterance.rate = 1;
+        utterance.pitch = 1;
+
+        let finished = false;
+        const complete = () => {
+          if (finished) return;
+          finished = true;
+          resolve();
+        };
+
+        utterance.onend = complete;
+        utterance.onerror = complete;
+        window.speechSynthesis.speak(utterance);
+
+        // Fallback to avoid queue blocking if browser speech callbacks misbehave.
+        window.setTimeout(complete, 10000);
+      }),
+    [voiceEnabled]
+  );
+
+  const processReminderQueue = useCallback(async () => {
+    if (processingReminderQueueRef.current) return;
+    processingReminderQueueRef.current = true;
+
+    try {
+      while (reminderQueueRef.current.length > 0) {
+        const task = reminderQueueRef.current.shift();
+        if (!task) continue;
+
+        for (let i = 0; i < task.times; i++) {
+          playSound('reminder');
+          await speakTextOnce(`老师提醒：${task.message}`);
+          if (i < task.times - 1) {
+            await new Promise((resolve) => window.setTimeout(resolve, 1200));
+          }
+        }
+
+        queuedReminderIdsRef.current.delete(task.id);
+      }
+    } finally {
+      processingReminderQueueRef.current = false;
+    }
+  }, [playSound, speakTextOnce]);
+
   // 处理扫码输入
   const handleScanInput = useCallback(async (value: string) => {
     if (!value.trim()) return;
@@ -138,7 +194,7 @@ function ScannerContent() {
       const guardStatus = await checkTimeGuard(classId);
       setTimeGuard(guardStatus);
       
-    } catch (error) {
+      } catch {
       setLastResult({
         success: false,
         message: '提交失败，请重试',
@@ -276,15 +332,16 @@ function ScannerContent() {
         if (record.id === dismissedReminderId) return;
         setReminderId(record.id);
         setReminderText(record.message);
-        if (lastPlayedReminderIdRef.current !== record.id) {
+        if (lastPlayedReminderIdRef.current !== record.id && !queuedReminderIdsRef.current.has(record.id)) {
           lastPlayedReminderIdRef.current = record.id;
           const times = Math.max(1, Math.min(5, reminderBroadcastTimes));
-          for (let i = 0; i < times; i++) {
-            window.setTimeout(() => {
-              playSound('reminder');
-              speakText(`老师提醒：${record.message}`, { cancelPrevious: i === 0 });
-            }, i * 1600);
-          }
+          reminderQueueRef.current.push({
+            id: record.id,
+            message: record.message,
+            times,
+          });
+          queuedReminderIdsRef.current.add(record.id);
+          void processReminderQueue();
         }
       } catch {
         // Ignore reminder polling failures.
@@ -298,7 +355,7 @@ function ScannerContent() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [classId, dismissedReminderId, playSound, speakText, reminderBroadcastTimes]);
+  }, [classId, dismissedReminderId, processReminderQueue, reminderBroadcastTimes]);
 
   // 提醒自动关闭（显示 1 分钟）
   useEffect(() => {
