@@ -92,6 +92,15 @@ create table if not exists public.health_check (
   updated_at timestamptz default now()
 );
 
+-- Dev setup: disable RLS on core tables to allow anon key CRUD.
+-- If you plan to go to production, replace this with explicit RLS policies.
+alter table public.classes disable row level security;
+alter table public.students disable row level security;
+alter table public.subjects disable row level security;
+alter table public.homework_records disable row level security;
+alter table public.homework_exemptions disable row level security;
+alter table public.system_configs disable row level security;
+
 -- Ensure one global config row exists (class_id is null)
 insert into public.system_configs (class_id)
 select null

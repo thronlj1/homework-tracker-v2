@@ -89,14 +89,21 @@ except Exception as e:
 async function getSupabaseCredentials(): Promise<SupabaseCredentials> {
   await loadEnv();
 
-  const url = process.env.COZE_SUPABASE_URL;
-  const anonKey = process.env.COZE_SUPABASE_ANON_KEY;
+  const isBrowser = typeof window !== 'undefined';
+
+  // Server side prefers COZE_* variables; browser must use NEXT_PUBLIC_*.
+  const url = isBrowser
+    ? (process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.COZE_SUPABASE_URL)
+    : (process.env.COZE_SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const anonKey = isBrowser
+    ? (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.COZE_SUPABASE_ANON_KEY)
+    : (process.env.COZE_SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
 
   if (!url) {
-    throw new Error('COZE_SUPABASE_URL is not set');
+    throw new Error('Supabase URL is not set');
   }
   if (!anonKey) {
-    throw new Error('COZE_SUPABASE_ANON_KEY is not set');
+    throw new Error('Supabase anon/publishable key is not set');
   }
 
   return { url, anonKey };
