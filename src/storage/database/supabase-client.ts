@@ -9,6 +9,48 @@ interface SupabaseCredentials {
   anonKey: string;
 }
 
+function maskSecret(value?: string): string {
+  if (!value) return '(empty)';
+  if (value.length <= 8) return `${value[0] ?? ''}***(${value.length})`;
+  return `${value.slice(0, 4)}...${value.slice(-4)}(len=${value.length})`;
+}
+
+function getUrlSource(isBrowser: boolean): string {
+  if (isBrowser) {
+    if (process.env.NEXT_PUBLIC_SUPABASE_URL) return 'NEXT_PUBLIC_SUPABASE_URL';
+    if (getServerSupabaseUrl()) return 'SUPABASE_URL/COZE_SUPABASE_URL';
+    return 'none';
+  }
+  if (getServerSupabaseUrl()) return 'SUPABASE_URL/COZE_SUPABASE_URL';
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL) return 'NEXT_PUBLIC_SUPABASE_URL';
+  return 'none';
+}
+
+function getKeySource(isBrowser: boolean): string {
+  if (isBrowser) {
+    if (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) return 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY';
+    if (getServerSupabaseAnonKey()) return 'SUPABASE_ANON_KEY/COZE_SUPABASE_ANON_KEY';
+    return 'none';
+  }
+  if (getServerSupabaseAnonKey()) return 'SUPABASE_ANON_KEY/COZE_SUPABASE_ANON_KEY';
+  if (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) return 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY';
+  return 'none';
+}
+
+function logSupabaseEnvDiagnostics(isBrowser: boolean, url?: string, anonKey?: string): void {
+  if (isBrowser) return;
+  console.error(
+    '[supabase-env] diagnostics',
+    JSON.stringify({
+      urlSource: getUrlSource(isBrowser),
+      keySource: getKeySource(isBrowser),
+      urlMasked: maskSecret(url),
+      keyMasked: maskSecret(anonKey),
+      hasServiceRoleKey: Boolean(getServerSupabaseServiceRoleKey()),
+    })
+  );
+}
+
 function getServerSupabaseUrl(): string | undefined {
   return process.env.SUPABASE_URL ?? process.env.COZE_SUPABASE_URL;
 }
@@ -102,8 +144,18 @@ async function getSupabaseCredentials(): Promise<SupabaseCredentials> {
     ? (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? getServerSupabaseAnonKey())
     : (getServerSupabaseAnonKey() ?? process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
 
-  if (!url) throw new Error('Supabase URL is not set');
-  if (!anonKey) throw new Error('Supabase anon/publishable key is not set');
+  if (!url) {
+    logSupabaseEnvDiagnostics(isBrowser, url, anonKey);
+    throw new Error('Supabase URL is not set');
+  }
+  if (!anonKey) {
+    logSupabaseEnvDiagnostics(isBrowser, url, anonKey);
+    throw new Error('Supabase anon/publishable key is not set');
+  }
+
+  if (!isBrowser && process.env.SUPABASE_DEBUG_ENV === '1') {
+    logSupabaseEnvDiagnostics(isBrowser, url, anonKey);
+  }
 
   return { url, anonKey };
 }
