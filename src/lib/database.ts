@@ -14,6 +14,23 @@ import type {
   StudentStatus,
 } from '@/types/database';
 
+const isBrowser = typeof window !== 'undefined';
+
+type ApiEnvelope<T> = {
+  success: boolean;
+  data?: T;
+  message?: string;
+};
+
+async function apiRequest<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
+  const response = await fetch(input, init);
+  const payload = (await response.json()) as ApiEnvelope<T>;
+  if (!response.ok || !payload.success) {
+    throw new Error(payload.message || '请求失败');
+  }
+  return payload.data as T;
+}
+
 // ==================== 辅助函数 ====================
 
 // 解析二维码数据
@@ -55,6 +72,9 @@ function isWeekend(date: Date): boolean {
 // ==================== 班级操作 ====================
 
 export async function getClasses(): Promise<Class[]> {
+  if (isBrowser) {
+    return apiRequest<Class[]>('/api/classes');
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client.from('classes').select('*').order('name');
   if (error) throw new Error(`获取班级列表失败: ${error.message}`);
@@ -62,6 +82,9 @@ export async function getClasses(): Promise<Class[]> {
 }
 
 export async function getClassById(id: number): Promise<Class | null> {
+  if (isBrowser) {
+    return apiRequest<Class | null>(`/api/classes?id=${id}`);
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client.from('classes').select('*').eq('id', id).maybeSingle();
   if (error) throw new Error(`获取班级失败: ${error.message}`);
@@ -69,6 +92,13 @@ export async function getClassById(id: number): Promise<Class | null> {
 }
 
 export async function createClass(name: string, classImage?: string): Promise<Class> {
+  if (isBrowser) {
+    return apiRequest<Class>('/api/classes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, classImage }),
+    });
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client.from('classes').insert({ name, class_image: classImage }).select().single();
   if (error) throw new Error(`创建班级失败: ${error.message}`);
@@ -79,6 +109,13 @@ export async function updateClass(
   id: number,
   updates: Partial<Pick<Class, 'name' | 'class_image'>>
 ): Promise<Class> {
+  if (isBrowser) {
+    return apiRequest<Class>('/api/classes', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, updates }),
+    });
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client
     .from('classes')
@@ -91,6 +128,10 @@ export async function updateClass(
 }
 
 export async function deleteClass(id: number): Promise<void> {
+  if (isBrowser) {
+    await apiRequest<null>(`/api/classes?id=${id}`, { method: 'DELETE' });
+    return;
+  }
   const client = await getSupabaseClient();
   const { error } = await client.from('classes').delete().eq('id', id);
   if (error) throw new Error(`删除班级失败: ${error.message}`);
@@ -99,6 +140,9 @@ export async function deleteClass(id: number): Promise<void> {
 // ==================== 学生操作 ====================
 
 export async function getStudentsByClass(classId: number): Promise<Student[]> {
+  if (isBrowser) {
+    return apiRequest<Student[]>(`/api/students?classId=${classId}`);
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client.from('students').select('*').eq('class_id', classId).order('student_code');
   if (error) throw new Error(`获取学生列表失败: ${error.message}`);
@@ -118,6 +162,13 @@ export async function createStudent(
   studentCode: string,
   avatarImage?: string
 ): Promise<Student> {
+  if (isBrowser) {
+    return apiRequest<Student>('/api/students', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ classId, name, studentCode, avatarImage }),
+    });
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client
     .from('students')
@@ -132,6 +183,13 @@ export async function updateStudent(
   id: number,
   updates: Partial<Pick<Student, 'name' | 'student_code' | 'avatar_image'>>
 ): Promise<Student> {
+  if (isBrowser) {
+    return apiRequest<Student>('/api/students', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, updates }),
+    });
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client
     .from('students')
@@ -144,6 +202,10 @@ export async function updateStudent(
 }
 
 export async function deleteStudent(id: number): Promise<void> {
+  if (isBrowser) {
+    await apiRequest<null>(`/api/students?id=${id}`, { method: 'DELETE' });
+    return;
+  }
   const client = await getSupabaseClient();
   const { error } = await client.from('students').delete().eq('id', id);
   if (error) throw new Error(`删除学生失败: ${error.message}`);
@@ -152,6 +214,9 @@ export async function deleteStudent(id: number): Promise<void> {
 // ==================== 科目操作 ====================
 
 export async function getSubjectsByClass(classId: number): Promise<Subject[]> {
+  if (isBrowser) {
+    return apiRequest<Subject[]>(`/api/subjects?classId=${classId}`);
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client.from('subjects').select('*').eq('class_id', classId).order('name');
   if (error) throw new Error(`获取科目列表失败: ${error.message}`);
@@ -170,6 +235,13 @@ export async function createSubject(
   name: string,
   subjectImage?: string
 ): Promise<Subject> {
+  if (isBrowser) {
+    return apiRequest<Subject>('/api/subjects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ classId, name, subjectImage }),
+    });
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client
     .from('subjects')
@@ -184,6 +256,13 @@ export async function updateSubject(
   id: number,
   updates: Partial<Pick<Subject, 'name' | 'subject_image'>>
 ): Promise<Subject> {
+  if (isBrowser) {
+    return apiRequest<Subject>('/api/subjects', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, updates }),
+    });
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client
     .from('subjects')
@@ -196,6 +275,10 @@ export async function updateSubject(
 }
 
 export async function deleteSubject(id: number): Promise<void> {
+  if (isBrowser) {
+    await apiRequest<null>(`/api/subjects?id=${id}`, { method: 'DELETE' });
+    return;
+  }
   const client = await getSupabaseClient();
   const { error } = await client.from('subjects').delete().eq('id', id);
   if (error) throw new Error(`删除科目失败: ${error.message}`);
@@ -256,6 +339,10 @@ export async function submitHomework(
 }
 
 export async function deleteHomeworkRecord(id: number): Promise<void> {
+  if (isBrowser) {
+    await apiRequest<null>(`/api/homework-records?id=${id}`, { method: 'DELETE' });
+    return;
+  }
   const client = await getSupabaseClient();
   const { error } = await client.from('homework_records').delete().eq('id', id);
   if (error) throw new Error(`删除作业记录失败: ${error.message}`);
@@ -284,6 +371,13 @@ export async function createExemption(
   date: string,
   reason?: string
 ): Promise<HomeworkExemption> {
+  if (isBrowser) {
+    return apiRequest<HomeworkExemption>('/api/exemptions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ classId, studentId, subjectId, date, reason }),
+    });
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client
     .from('homework_exemptions')
@@ -309,6 +403,9 @@ export async function deleteExemption(id: number): Promise<void> {
 // ==================== 系统配置操作 ====================
 
 export async function getSystemConfig(classId?: number): Promise<SystemConfig | null> {
+  if (isBrowser && !classId) {
+    return apiRequest<SystemConfig | null>('/api/config');
+  }
   const client = await getSupabaseClient();
   
   if (classId) {
@@ -332,6 +429,13 @@ export async function updateSystemConfig(
   id: number,
   updates: Partial<Omit<SystemConfig, 'id' | 'created_at' | 'updated_at'>>
 ): Promise<SystemConfig> {
+  if (isBrowser) {
+    return apiRequest<SystemConfig>('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client
     .from('system_configs')
@@ -350,6 +454,13 @@ export async function createSystemConfig(config: {
   alert_continuous_days?: number;
   global_task_status?: 'semester' | 'vacation';
 }): Promise<SystemConfig> {
+  if (isBrowser) {
+    return apiRequest<SystemConfig>('/api/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+  }
   const client = await getSupabaseClient();
   const { data, error } = await client.from('system_configs').insert(config).select().single();
   if (error) throw new Error(`创建系统配置失败: ${error.message}`);
@@ -381,6 +492,10 @@ async function checkHolidayApi(): Promise<boolean> {
 }
 
 export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus> {
+  if (isBrowser) {
+    const query = classId ? `?classId=${classId}` : '';
+    return apiRequest<TimeGuardStatus>(`/api/time-guard${query}`);
+  }
   const config = await getSystemConfig(classId);
   const today = getTodayDate();
   const currentTime = getCurrentTime();
@@ -470,6 +585,10 @@ export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus>
 // ==================== 统计数据 ====================
 
 export async function getClassStats(classId: number, date: string): Promise<ClassStats> {
+  if (isBrowser) {
+    const result = await apiRequest<{ stats: ClassStats }>(`/api/stats?classId=${classId}&date=${date}`);
+    return result.stats;
+  }
   const [students, subjects, records, exemptions] = await Promise.all([
     getStudentsByClass(classId),
     getSubjectsByClass(classId),
@@ -510,6 +629,12 @@ export async function getStudentStatuses(
   subjectId: number,
   date: string
 ): Promise<StudentStatus[]> {
+  if (isBrowser) {
+    const result = await apiRequest<{ studentStatuses: StudentStatus[] | null }>(
+      `/api/stats?classId=${classId}&subjectId=${subjectId}&date=${date}`
+    );
+    return result.studentStatuses || [];
+  }
   const [students, records, exemptions] = await Promise.all([
     getStudentsByClass(classId),
     getHomeworkRecords(classId, date),
@@ -635,6 +760,12 @@ export async function checkStudentWarnings(
   subjectId: number,
   thresholdDays: number = 3
 ): Promise<number[]> {
+  if (isBrowser) {
+    const result = await apiRequest<{ warningStudents: number[] }>(
+      `/api/stats?classId=${classId}&subjectId=${subjectId}&date=${getTodayDate()}`
+    );
+    return result.warningStudents || [];
+  }
   const client = await getSupabaseClient();
   const students = await getStudentsByClass(classId);
   const warningStudents: number[] = [];
