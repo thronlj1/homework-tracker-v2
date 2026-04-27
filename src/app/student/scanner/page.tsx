@@ -8,6 +8,12 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
 
+type BarcodeDetectorLike = {
+  detect(source: ImageBitmapSource): Promise<Array<{ rawValue?: string }>>;
+};
+
+type BarcodeDetectorCtor = new (options?: { formats?: string[] }) => BarcodeDetectorLike;
+
 function ScannerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -28,6 +34,17 @@ function ScannerContent() {
   const [reminderId, setReminderId] = useState<string | null>(null);
   const [dismissedReminderId, setDismissedReminderId] = useState<string | null>(null);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [cameraCapable, setCameraCapable] = useState(false);
+  const [cameraPanelOpen, setCameraPanelOpen] = useState(false);
+  const [cameraStatusText, setCameraStatusText] = useState('准备扫码');
+  const [isMobileDevice, setIsMobileDevice] = useState(false);
+  const [cameraDebugInfo, setCameraDebugInfo] = useState<{
+    mobileLike: boolean;
+    secureContext: boolean;
+    hasMediaDevices: boolean;
+    hasGetUserMedia: boolean;
+    hasBarcodeDetector: boolean;
+  } | null>(null);
   const [reminderChannelStatus, setReminderChannelStatus] = useState<'sse' | 'polling'>('polling');
   const lastPlayedReminderIdRef = useRef<string | null>(null);
   const reminderBroadcastTimesRef = useRef(1);
@@ -36,6 +53,16 @@ function ScannerContent() {
   const processingReminderQueueRef = useRef(false);
   const queuedReminderIdsRef = useRef(new Set<string>());
   const sseConnectedRef = useRef(false);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraFrameTimerRef = useRef<number | null>(null);
+  const cameraScanBusyRef = useRef(false);
+
+  const getBarcodeDetectorCtor = useCallback((): BarcodeDetectorCtor | null => {
+    if (typeof window === 'undefined') return null;
+    const maybeDetector = (window as unknown as { BarcodeDetector?: BarcodeDetectorCtor }).BarcodeDetector;
+    return typeof maybeDetector === 'function' ? maybeDetector : null;
+  }, []);
 
   const parsedReminder = (() => {
     if (!reminderText) return null;
@@ -154,7 +181,6 @@ function ScannerContent() {
         if (!task) continue;
 
         for (let i = 0; i < task.times; i++) {
-          playSound('reminder');
           await speakTextOnce(`老师提醒：${task.message}`);
           if (i < task.times - 1) {
             await new Promise((resolve) => window.setTimeout(resolve, 400));
@@ -166,7 +192,7 @@ function ScannerContent() {
     } finally {
       processingReminderQueueRef.current = false;
     }
-  }, [playSound, speakTextOnce]);
+  }, [speakTextOnce]);
 
   const handleIncomingReminder = useCallback(
     (record: { id?: string; message?: string; updatedAt?: number } | null | undefined) => {
@@ -246,6 +272,97 @@ function ScannerContent() {
       setManualCode('');
     }
   }, [classId, playSound, speakText]);
+
+  const stopCameraScan = useCallback(() => {
+    if (cameraFrameTimerRef.current !== null) {
+      window.clearTimeout(cameraFrameTimerRef.current);
+      cameraFrameTimerRef.current = null;
+    }
+    const stream = cameraStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    }
+    if (cameraVideoRef.current) {
+      cameraVideoRef.current.srcObject = null;
+    }
+    cameraScanBusyRef.current = false;
+  }, []);
+
+  const startCameraScan = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      if (!window.isSecureContext) {
+        setCameraStatusText('当前页面非 HTTPS/localhost，浏览器禁止摄像头访问');
+      } else {
+        setCameraStatusText('当前设备不支持摄像头访问');
+      }
+      return;
+    }
+
+    stopCameraScan();
+    setCameraStatusText('正在打开摄像头...');
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      });
+      cameraStreamRef.current = stream;
+
+      const videoEl = cameraVideoRef.current;
+      if (!videoEl) {
+        setCameraStatusText('摄像头预览初始化失败');
+        stopCameraScan();
+        return;
+      }
+      videoEl.srcObject = stream;
+      await videoEl.play();
+
+      const Detector = getBarcodeDetectorCtor();
+      if (!Detector) {
+        setCameraStatusText('摄像头已打开，但当前浏览器不支持自动识别二维码');
+        return;
+      }
+
+      const detector = new Detector({
+        formats: ['qr_code'],
+      });
+
+      const loop = async () => {
+        if (!cameraPanelOpen) return;
+        if (cameraScanBusyRef.current) {
+          cameraFrameTimerRef.current = window.setTimeout(loop, 120);
+          return;
+        }
+
+        cameraScanBusyRef.current = true;
+        try {
+          if (videoEl.readyState >= 2) {
+            const results = await detector.detect(videoEl);
+            const rawValue = results?.[0]?.rawValue?.trim();
+            if (rawValue) {
+              setCameraStatusText('识别成功，正在提交...');
+              stopCameraScan();
+              setCameraPanelOpen(false);
+              await handleScanInput(rawValue);
+              return;
+            }
+          }
+        } catch {
+          // Ignore frame-level decode failures.
+        } finally {
+          cameraScanBusyRef.current = false;
+        }
+        cameraFrameTimerRef.current = window.setTimeout(loop, 160);
+      };
+
+      setCameraStatusText('请将二维码放入画面中央');
+      cameraFrameTimerRef.current = window.setTimeout(loop, 200);
+    } catch {
+      setCameraStatusText('无法访问摄像头，请检查浏览器权限');
+      stopCameraScan();
+    }
+  }, [cameraPanelOpen, getBarcodeDetectorCtor, handleScanInput, stopCameraScan]);
 
   // 键盘事件监听
   useEffect(() => {
@@ -361,6 +478,35 @@ function ScannerContent() {
     window.localStorage.setItem('student_voice_enabled', voiceEnabled ? '1' : '0');
   }, [voiceEnabled]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const isMobileLike = /Android|iPhone|iPad|iPod|Windows Phone/i.test(window.navigator.userAgent);
+    setIsMobileDevice(isMobileLike);
+    const hasMediaDevices = Boolean(navigator.mediaDevices);
+    const hasGetUserMedia = Boolean(navigator.mediaDevices?.getUserMedia);
+    const hasBarcodeDetector = Boolean(getBarcodeDetectorCtor());
+    const secureContext = Boolean(window.isSecureContext);
+    setCameraDebugInfo({
+      mobileLike: isMobileLike,
+      secureContext,
+      hasMediaDevices,
+      hasGetUserMedia,
+      hasBarcodeDetector,
+    });
+    const canUseCamera = Boolean(isMobileLike);
+    setCameraCapable(canUseCamera);
+  }, [getBarcodeDetectorCtor]);
+
+  useEffect(() => {
+    if (cameraPanelOpen) {
+      void startCameraScan();
+      return;
+    }
+    stopCameraScan();
+  }, [cameraPanelOpen, startCameraScan, stopCameraScan]);
+
+  useEffect(() => () => stopCameraScan(), [stopCameraScan]);
+
   // SSE 实时接收教师端催交提醒（失败时由轮询兜底）
   useEffect(() => {
     if (!classId || typeof window === 'undefined' || typeof EventSource === 'undefined') return;
@@ -473,7 +619,7 @@ function ScannerContent() {
 
   return (
     <div 
-      className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex flex-col"
+      className="h-[100dvh] bg-gradient-to-br from-green-50 to-emerald-100 flex flex-col overflow-hidden"
       tabIndex={0}
       ref={(el) => el?.focus()}
     >
@@ -515,7 +661,7 @@ function ScannerContent() {
       />
 
       {/* 主内容区 */}
-      <main className="flex-1 flex flex-col items-center justify-center p-4">
+      <main className="flex-1 flex flex-col items-center justify-center p-3 md:p-4 overflow-y-auto">
         {/* 教师端催交提醒 */}
         {reminderText && (
           <div className="w-full max-w-md mb-4">
@@ -610,13 +756,45 @@ function ScannerContent() {
         )}
 
         {/* 提示信息 */}
-        <div className="mt-8 text-center text-gray-500">
+        <div className="mt-4 md:mt-8 text-center text-gray-500 w-full max-w-md">
           <p className="text-sm">系统支持自动识别扫码枪输入</p>
           <p className="text-xs mt-1">也可直接在此页面输入二维码编号</p>
+          {cameraCapable && (
+            <div className="mt-3">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setCameraStatusText('准备扫码');
+                  setCameraPanelOpen((prev) => !prev);
+                }}
+              >
+                {cameraPanelOpen ? '关闭摄像头扫码' : '使用摄像头扫码'}
+              </Button>
+            </div>
+          )}
+          {cameraCapable && cameraPanelOpen && (
+            <div className="mt-3 w-full max-w-md mx-auto rounded-lg border bg-white p-3">
+              <video
+                ref={cameraVideoRef}
+                className="w-full rounded-md bg-black"
+                playsInline
+                muted
+                autoPlay
+              />
+              <p className="text-xs text-gray-600 mt-2">{cameraStatusText}</p>
+            </div>
+          )}
+          {debugFeatureEnabled && cameraDebugInfo && (
+            <div className="mt-3 rounded-md border bg-white/80 p-2 text-left text-[11px] text-gray-600">
+              <p>设备调试：mobile={String(cameraDebugInfo.mobileLike)} secure={String(cameraDebugInfo.secureContext)}</p>
+              <p>mediaDevices={String(cameraDebugInfo.hasMediaDevices)} getUserMedia={String(cameraDebugInfo.hasGetUserMedia)}</p>
+              <p>barcodeDetector={String(cameraDebugInfo.hasBarcodeDetector)}</p>
+            </div>
+          )}
         </div>
 
         {/* Debug: 手动输入作业码（仅 NEXT_PUBLIC_APP_MODE=debug 时显示） */}
-        {debugFeatureEnabled && (
+        {debugFeatureEnabled && (!isMobileDevice || debugFromQuery) && (
           <div className="mt-6 w-full max-w-md">
             <Card>
               <CardHeader className="pb-3">
