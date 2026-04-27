@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { checkTimeGuard, getClassById, getSystemConfig } from '@/lib/database';
 import type { Class, TimeGuardStatus, SubmitResult } from '@/types/database';
+import jsQR from 'jsqr';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
@@ -320,13 +321,15 @@ function ScannerContent() {
 
       const Detector = getBarcodeDetectorCtor();
       if (!Detector) {
-        setCameraStatusText('摄像头已打开，但当前浏览器不支持自动识别二维码');
-        return;
+        setCameraStatusText('摄像头已打开，使用兼容模式识别二维码');
       }
-
-      const detector = new Detector({
-        formats: ['qr_code'],
-      });
+      const detector = Detector
+        ? new Detector({
+            formats: ['qr_code'],
+          })
+        : null;
+      const fallbackCanvas = document.createElement('canvas');
+      const fallbackContext = fallbackCanvas.getContext('2d', { willReadFrequently: true });
 
       const loop = async () => {
         if (!cameraPanelOpen) return;
@@ -338,8 +341,22 @@ function ScannerContent() {
         cameraScanBusyRef.current = true;
         try {
           if (videoEl.readyState >= 2) {
-            const results = await detector.detect(videoEl);
-            const rawValue = results?.[0]?.rawValue?.trim();
+            let rawValue = '';
+            if (detector) {
+              const results = await detector.detect(videoEl);
+              rawValue = results?.[0]?.rawValue?.trim() || '';
+            } else if (fallbackContext) {
+              const width = videoEl.videoWidth;
+              const height = videoEl.videoHeight;
+              if (width > 0 && height > 0) {
+                fallbackCanvas.width = width;
+                fallbackCanvas.height = height;
+                fallbackContext.drawImage(videoEl, 0, 0, width, height);
+                const imageData = fallbackContext.getImageData(0, 0, width, height);
+                const code = jsQR(imageData.data, width, height);
+                rawValue = code?.data?.trim() || '';
+              }
+            }
             if (rawValue) {
               setCameraStatusText('识别成功，正在提交...');
               stopCameraScan();
@@ -784,7 +801,7 @@ function ScannerContent() {
               <p className="text-xs text-gray-600 mt-2">{cameraStatusText}</p>
             </div>
           )}
-          {debugFeatureEnabled && cameraDebugInfo && (
+          {debugFromQuery && cameraDebugInfo && (
             <div className="mt-3 rounded-md border bg-white/80 p-2 text-left text-[11px] text-gray-600">
               <p>设备调试：mobile={String(cameraDebugInfo.mobileLike)} secure={String(cameraDebugInfo.secureContext)}</p>
               <p>mediaDevices={String(cameraDebugInfo.hasMediaDevices)} getUserMedia={String(cameraDebugInfo.hasGetUserMedia)}</p>
