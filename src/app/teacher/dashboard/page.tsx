@@ -407,8 +407,11 @@ function DashboardContent() {
                           variant="ghost" 
                           size="sm"
                           onClick={() => {
-                            // 查找记录ID并撤销
-                            // 注意：这里需要实际实现撤销功能
+                            if (!student.record_id) {
+                              alert('未找到可撤销的提交记录');
+                              return;
+                            }
+                            handleRevoke(student.record_id);
                           }}
                         >
                           撤销

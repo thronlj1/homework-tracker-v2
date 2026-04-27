@@ -7,6 +7,8 @@ export async function GET(request: NextRequest) {
     const classId = searchParams.get('classId');
     const subjectId = searchParams.get('subjectId');
     const date = searchParams.get('date') || new Date().toISOString().split('T')[0];
+    const includeStatuses = searchParams.get('includeStatuses') !== '0';
+    const includeWarnings = searchParams.get('includeWarnings') !== '0';
     
     if (!classId) {
       return NextResponse.json({ 
@@ -21,12 +23,14 @@ export async function GET(request: NextRequest) {
     let studentStatuses = null;
     let warningStudents: number[] = [];
     
-    if (subjectId) {
+    if (subjectId && includeStatuses) {
       studentStatuses = await getStudentStatuses(
-        parseInt(classId, 10), 
-        parseInt(subjectId, 10), 
+        parseInt(classId, 10),
+        parseInt(subjectId, 10),
         date
       );
+    }
+    if (subjectId && includeWarnings) {
       warningStudents = await checkStudentWarnings(
         parseInt(classId, 10),
         parseInt(subjectId, 10),

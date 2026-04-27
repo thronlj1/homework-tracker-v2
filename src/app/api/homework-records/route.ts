@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { deleteHomeworkRecord } from '@/lib/database';
+import { requireAdmin } from '@/lib/admin-auth';
 
 export async function DELETE(request: NextRequest) {
   try {
+    const authResponse = requireAdmin(request);
+    if (authResponse) return authResponse;
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     if (!id) {
