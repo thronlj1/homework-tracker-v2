@@ -5,6 +5,8 @@
   "scripts": {
     "build": "bash ./scripts/build.sh",
     "dev": "bash ./scripts/dev.sh",
+    "desktop:start": "electron electron/main.cjs",
+    "desktop:start:scanner": "ELECTRON_START_URL=http://localhost:5000/student/scanner electron electron/main.cjs",
     "preinstall": "npx only-allow pnpm",
     "lint": "eslint",
     "start": "bash ./scripts/start.sh",
@@ -76,6 +78,7 @@
     "@types/pg": "^8.16.0",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^41.3.0",
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "only-allow": "^1.2.2",
