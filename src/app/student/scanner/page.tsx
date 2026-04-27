@@ -33,6 +33,7 @@ function ScannerContent() {
   const reminderQueueRef = useRef<Array<{ id: string; message: string; times: number }>>([]);
   const processingReminderQueueRef = useRef(false);
   const queuedReminderIdsRef = useRef(new Set<string>());
+  const sseConnectedRef = useRef(false);
 
   const parsedReminder = (() => {
     if (!reminderText) return null;
@@ -164,6 +165,29 @@ function ScannerContent() {
       processingReminderQueueRef.current = false;
     }
   }, [playSound, speakTextOnce]);
+
+  const handleIncomingReminder = useCallback(
+    (record: { id?: string; message?: string } | null | undefined) => {
+      if (!record?.id || !record.message) return;
+      if (record.id === dismissedReminderId) return;
+
+      setReminderId(record.id);
+      setReminderText(record.message);
+
+      if (lastPlayedReminderIdRef.current !== record.id && !queuedReminderIdsRef.current.has(record.id)) {
+        lastPlayedReminderIdRef.current = record.id;
+        const times = Math.max(1, Math.min(5, reminderBroadcastTimes));
+        reminderQueueRef.current.push({
+          id: record.id,
+          message: record.message,
+          times,
+        });
+        queuedReminderIdsRef.current.add(record.id);
+        void processReminderQueue();
+      }
+    },
+    [dismissedReminderId, processReminderQueue, reminderBroadcastTimes]
+  );
 
   // 处理扫码输入
   const handleScanInput = useCallback(async (value: string) => {
@@ -313,7 +337,41 @@ function ScannerContent() {
     window.localStorage.setItem('student_voice_enabled', voiceEnabled ? '1' : '0');
   }, [voiceEnabled]);
 
-  // 轮询获取教师端催交提醒
+  // SSE 实时接收教师端催交提醒（失败时由轮询兜底）
+  useEffect(() => {
+    if (!classId || typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+
+    const eventSource = new EventSource(`/api/reminder/stream?classId=${classId}`);
+    let closedByCleanup = false;
+
+    eventSource.addEventListener('ready', () => {
+      sseConnectedRef.current = true;
+    });
+
+    eventSource.addEventListener('reminder', (event) => {
+      try {
+        const parsed = JSON.parse((event as MessageEvent).data) as { id?: string; message?: string };
+        handleIncomingReminder(parsed);
+      } catch {
+        // Ignore malformed reminder payload.
+      }
+    });
+
+    eventSource.onerror = () => {
+      sseConnectedRef.current = false;
+      if (!closedByCleanup) {
+        eventSource.close();
+      }
+    };
+
+    return () => {
+      closedByCleanup = true;
+      sseConnectedRef.current = false;
+      eventSource.close();
+    };
+  }, [classId, handleIncomingReminder]);
+
+  // 轮询兜底：SSE 不可用/未连接时继续工作
   useEffect(() => {
     if (!classId) return;
 
@@ -322,27 +380,14 @@ function ScannerContent() {
 
     async function pollReminder() {
       try {
+        if (typeof EventSource !== 'undefined' && sseConnectedRef.current) return;
         const response = await fetch(`/api/reminder?classId=${classId}`, {
           cache: 'no-store',
         });
         if (!response.ok || cancelled) return;
         const payload = await response.json();
         const record = payload?.data as { id?: string; message?: string } | null;
-        if (!record?.id || !record.message) return;
-        if (record.id === dismissedReminderId) return;
-        setReminderId(record.id);
-        setReminderText(record.message);
-        if (lastPlayedReminderIdRef.current !== record.id && !queuedReminderIdsRef.current.has(record.id)) {
-          lastPlayedReminderIdRef.current = record.id;
-          const times = Math.max(1, Math.min(5, reminderBroadcastTimes));
-          reminderQueueRef.current.push({
-            id: record.id,
-            message: record.message,
-            times,
-          });
-          queuedReminderIdsRef.current.add(record.id);
-          void processReminderQueue();
-        }
+        handleIncomingReminder(record);
       } catch {
         // Ignore reminder polling failures.
       }
@@ -355,7 +400,7 @@ function ScannerContent() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [classId, dismissedReminderId, processReminderQueue, reminderBroadcastTimes]);
+  }, [classId, handleIncomingReminder]);
 
   // 提醒自动关闭（显示 1 分钟）
   useEffect(() => {
