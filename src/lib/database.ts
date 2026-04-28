@@ -454,6 +454,8 @@ export async function createSystemConfig(config: {
   scan_end_time?: string;
   alert_continuous_days?: number;
   reminder_broadcast_times?: number;
+  reminder_schedule_times?: string | null;
+  reminder_poll_interval_minutes?: number;
   student_reminder_voice_enabled?: boolean;
   global_task_status?: 'semester' | 'vacation';
 }): Promise<SystemConfig> {
@@ -511,6 +513,8 @@ export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus>
     scan_end_time: '12:00',
     alert_continuous_days: 3,
     reminder_broadcast_times: 1,
+    reminder_schedule_times: null,
+    reminder_poll_interval_minutes: 5,
     student_reminder_voice_enabled: true,
     global_task_status: 'semester',
     today_override_date: null,
