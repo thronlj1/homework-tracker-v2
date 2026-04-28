@@ -4,18 +4,21 @@ import { Suspense, useEffect, useState, useRef, useCallback } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { checkTimeGuard, getClassById, getSystemConfig } from '@/lib/database';
 import type { Class, TimeGuardStatus, SubmitResult } from '@/types/database';
+import jsQR from 'jsqr';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Skeleton } from '@/components/ui/skeleton';
 import { Switch } from '@/components/ui/switch';
+
+type BarcodeDetectorLike = {
+  detect(source: ImageBitmapSource): Promise<Array<{ rawValue?: string }>>;
+};
+
+type BarcodeDetectorCtor = new (options?: { formats?: string[] }) => BarcodeDetectorLike;
 
 function ScannerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const classId = parseInt(searchParams.get('classId') || '0', 10);
-  const appMode = process.env.NEXT_PUBLIC_APP_MODE ?? 'prod';
-  const debugFeatureEnabled = appMode === 'debug';
-  const debugFromQuery = debugFeatureEnabled && searchParams.get('debug') === '1';
   
   const [classInfo, setClassInfo] = useState<Class | null>(null);
   const [timeGuard, setTimeGuard] = useState<TimeGuardStatus | null>(null);
@@ -23,14 +26,31 @@ function ScannerContent() {
   const [scanning, setScanning] = useState(false);
   const [lastResult, setLastResult] = useState<SubmitResult | null>(null);
   const [inputBuffer, setInputBuffer] = useState('');
-  const [debugMode, setDebugMode] = useState(debugFromQuery);
-  const [manualCode, setManualCode] = useState('');
   const [reminderText, setReminderText] = useState<string | null>(null);
   const [reminderId, setReminderId] = useState<string | null>(null);
   const [dismissedReminderId, setDismissedReminderId] = useState<string | null>(null);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
-  const [reminderBroadcastTimes, setReminderBroadcastTimes] = useState(1);
+  const [cameraCapable, setCameraCapable] = useState(false);
+  const [cameraPanelOpen, setCameraPanelOpen] = useState(false);
+  const [cameraStatusText, setCameraStatusText] = useState('准备扫码');
+  const [reminderChannelStatus, setReminderChannelStatus] = useState<'sse' | 'polling'>('polling');
   const lastPlayedReminderIdRef = useRef<string | null>(null);
+  const reminderBroadcastTimesRef = useRef(1);
+  const teacherReminderVoiceEnabledRef = useRef(true);
+  const reminderQueueRef = useRef<Array<{ id: string; message: string; times: number }>>([]);
+  const processingReminderQueueRef = useRef(false);
+  const queuedReminderIdsRef = useRef(new Set<string>());
+  const sseConnectedRef = useRef(false);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraFrameTimerRef = useRef<number | null>(null);
+  const cameraScanBusyRef = useRef(false);
+
+  const getBarcodeDetectorCtor = useCallback((): BarcodeDetectorCtor | null => {
+    if (typeof window === 'undefined') return null;
+    const maybeDetector = (window as unknown as { BarcodeDetector?: BarcodeDetectorCtor }).BarcodeDetector;
+    return typeof maybeDetector === 'function' ? maybeDetector : null;
+  }, []);
 
   const parsedReminder = (() => {
     if (!reminderText) return null;
@@ -109,6 +129,96 @@ function ScannerContent() {
     [voiceEnabled]
   );
 
+  const speakTextOnce = useCallback(
+    (text: string) =>
+      new Promise<void>((resolve) => {
+        if (!voiceEnabled || typeof window === 'undefined' || !('speechSynthesis' in window)) {
+          resolve();
+          return;
+        }
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'zh-CN';
+        utterance.rate = 1;
+        utterance.pitch = 1;
+
+        let finished = false;
+        const complete = () => {
+          if (finished) return;
+          finished = true;
+          resolve();
+        };
+
+        utterance.onend = complete;
+        utterance.onerror = complete;
+        window.speechSynthesis.speak(utterance);
+
+        // Fallback to avoid queue blocking if browser speech callbacks misbehave.
+        window.setTimeout(complete, 10000);
+      }),
+    [voiceEnabled]
+  );
+
+  const processReminderQueue = useCallback(async () => {
+    if (processingReminderQueueRef.current) return;
+    processingReminderQueueRef.current = true;
+
+    try {
+      while (reminderQueueRef.current.length > 0) {
+        const task = reminderQueueRef.current.shift();
+        if (!task) continue;
+
+        for (let i = 0; i < task.times; i++) {
+          await speakTextOnce(`老师提醒：${task.message}`);
+          if (i < task.times - 1) {
+            await new Promise((resolve) => window.setTimeout(resolve, 400));
+          }
+        }
+
+        queuedReminderIdsRef.current.delete(task.id);
+      }
+    } finally {
+      processingReminderQueueRef.current = false;
+    }
+  }, [speakTextOnce]);
+
+  const handleIncomingReminder = useCallback(
+    (record: { id?: string; message?: string; updatedAt?: number } | null | undefined) => {
+      if (!record?.id || !record.message) return;
+      if (record.id === dismissedReminderId) return;
+
+      setReminderId(record.id);
+      setReminderText(record.message);
+
+      if (lastPlayedReminderIdRef.current !== record.id && !queuedReminderIdsRef.current.has(record.id)) {
+        lastPlayedReminderIdRef.current = record.id;
+        if (!teacherReminderVoiceEnabledRef.current) return;
+
+        const times = Math.max(1, Math.min(5, reminderBroadcastTimesRef.current));
+        reminderQueueRef.current.push({
+          id: record.id,
+          message: record.message,
+          times,
+        });
+        queuedReminderIdsRef.current.add(record.id);
+        void processReminderQueue();
+      }
+    },
+    [dismissedReminderId, processReminderQueue]
+  );
+
+  const refreshReminderBroadcastTimes = useCallback(async () => {
+    if (!classId) return;
+    try {
+      const configData = await getSystemConfig(classId);
+      const times = Math.max(1, Math.min(5, configData?.reminder_broadcast_times ?? 1));
+      reminderBroadcastTimesRef.current = times;
+      teacherReminderVoiceEnabledRef.current = configData?.student_reminder_voice_enabled ?? true;
+    } catch {
+      // Ignore config refresh failures.
+    }
+  }, [classId]);
+
   // 处理扫码输入
   const handleScanInput = useCallback(async (value: string) => {
     if (!value.trim()) return;
@@ -138,7 +248,7 @@ function ScannerContent() {
       const guardStatus = await checkTimeGuard(classId);
       setTimeGuard(guardStatus);
       
-    } catch (error) {
+      } catch {
       setLastResult({
         success: false,
         message: '提交失败，请重试',
@@ -147,15 +257,124 @@ function ScannerContent() {
     } finally {
       setScanning(false);
       setInputBuffer('');
-      setManualCode('');
     }
   }, [classId, playSound, speakText]);
+
+  const stopCameraScan = useCallback(() => {
+    if (cameraFrameTimerRef.current !== null) {
+      window.clearTimeout(cameraFrameTimerRef.current);
+      cameraFrameTimerRef.current = null;
+    }
+    const stream = cameraStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    }
+    if (cameraVideoRef.current) {
+      cameraVideoRef.current.srcObject = null;
+    }
+    cameraScanBusyRef.current = false;
+  }, []);
+
+  const startCameraScan = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      if (!window.isSecureContext) {
+        setCameraStatusText('当前页面非 HTTPS/localhost，浏览器禁止摄像头访问');
+      } else {
+        setCameraStatusText('当前设备不支持摄像头访问');
+      }
+      return;
+    }
+
+    stopCameraScan();
+    setCameraStatusText('正在打开摄像头...');
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      });
+      cameraStreamRef.current = stream;
+
+      const videoEl = cameraVideoRef.current;
+      if (!videoEl) {
+        setCameraStatusText('摄像头预览初始化失败');
+        stopCameraScan();
+        return;
+      }
+      videoEl.srcObject = stream;
+      await videoEl.play();
+
+      const Detector = getBarcodeDetectorCtor();
+      if (!Detector) {
+        setCameraStatusText('摄像头已打开，使用兼容模式识别二维码');
+      }
+      const detector = Detector
+        ? new Detector({
+            formats: ['qr_code'],
+          })
+        : null;
+      const fallbackCanvas = document.createElement('canvas');
+      const fallbackContext = fallbackCanvas.getContext('2d', { willReadFrequently: true });
+
+      const loop = async () => {
+        if (!cameraPanelOpen) return;
+        if (cameraScanBusyRef.current) {
+          cameraFrameTimerRef.current = window.setTimeout(loop, 120);
+          return;
+        }
+
+        cameraScanBusyRef.current = true;
+        try {
+          if (videoEl.readyState >= 2) {
+            let rawValue = '';
+            if (detector) {
+              const results = await detector.detect(videoEl);
+              rawValue = results?.[0]?.rawValue?.trim() || '';
+            } else if (fallbackContext) {
+              const width = videoEl.videoWidth;
+              const height = videoEl.videoHeight;
+              if (width > 0 && height > 0) {
+                fallbackCanvas.width = width;
+                fallbackCanvas.height = height;
+                fallbackContext.drawImage(videoEl, 0, 0, width, height);
+                const imageData = fallbackContext.getImageData(0, 0, width, height);
+                const code = jsQR(imageData.data, width, height);
+                rawValue = code?.data?.trim() || '';
+              }
+            }
+            if (rawValue) {
+              setCameraStatusText('识别成功，正在提交...');
+              stopCameraScan();
+              setCameraPanelOpen(false);
+              await handleScanInput(rawValue);
+              return;
+            }
+          }
+        } catch {
+          // Ignore frame-level decode failures.
+        } finally {
+          cameraScanBusyRef.current = false;
+        }
+        cameraFrameTimerRef.current = window.setTimeout(loop, 160);
+      };
+
+      setCameraStatusText('请将二维码放入画面中央');
+      cameraFrameTimerRef.current = window.setTimeout(loop, 200);
+    } catch {
+      setCameraStatusText('无法访问摄像头，请检查浏览器权限');
+      stopCameraScan();
+    }
+  }, [cameraPanelOpen, getBarcodeDetectorCtor, handleScanInput, stopCameraScan]);
 
   // 键盘事件监听
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       // 如果系统锁定，不处理输入
       if (timeGuard && !timeGuard.allowed) return;
+
+      // 忽略组合键，避免 Ctrl/Cmd+V 的 "v" 被当成扫码内容提交
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       
       // 忽略输入框内的按键
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
@@ -193,6 +412,20 @@ function ScannerContent() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [inputBuffer, timeGuard, handleScanInput]);
 
+  // 支持直接粘贴学生码到页面任意位置后提交
+  useEffect(() => {
+    function handlePaste(e: ClipboardEvent) {
+      if (timeGuard && !timeGuard.allowed) return;
+      const pasted = e.clipboardData?.getData('text')?.trim() ?? '';
+      if (!pasted || scanning) return;
+      e.preventDefault();
+      void handleScanInput(pasted);
+    }
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [timeGuard, scanning, handleScanInput]);
+
   // 加载数据
   useEffect(() => {
     async function loadData() {
@@ -216,9 +449,9 @@ function ScannerContent() {
         
         setClassInfo(classData);
         setTimeGuard(guardStatus);
-        setReminderBroadcastTimes(
-          Math.max(1, Math.min(5, configData?.reminder_broadcast_times ?? 1))
-        );
+        const times = Math.max(1, Math.min(5, configData?.reminder_broadcast_times ?? 1));
+        reminderBroadcastTimesRef.current = times;
+        teacherReminderVoiceEnabledRef.current = configData?.student_reminder_voice_enabled ?? true;
       } catch (error) {
         console.error('Load data error:', error);
       } finally {
@@ -235,6 +468,14 @@ function ScannerContent() {
       }
     };
   }, [classId, router]);
+
+  useEffect(() => {
+    if (!classId) return;
+    const timer = window.setInterval(() => {
+      void refreshReminderBroadcastTimes();
+    }, 15000);
+    return () => window.clearInterval(timer);
+  }, [classId, refreshReminderBroadcastTimes]);
 
   // 聚焦隐藏的输入框
   useEffect(() => {
@@ -257,7 +498,61 @@ function ScannerContent() {
     window.localStorage.setItem('student_voice_enabled', voiceEnabled ? '1' : '0');
   }, [voiceEnabled]);
 
-  // 轮询获取教师端催交提醒
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const isMobileLike = /Android|iPhone|iPad|iPod|Windows Phone/i.test(window.navigator.userAgent);
+    const canUseCamera = Boolean(isMobileLike);
+    setCameraCapable(canUseCamera);
+  }, []);
+
+  useEffect(() => {
+    if (cameraPanelOpen) {
+      void startCameraScan();
+      return;
+    }
+    stopCameraScan();
+  }, [cameraPanelOpen, startCameraScan, stopCameraScan]);
+
+  useEffect(() => () => stopCameraScan(), [stopCameraScan]);
+
+  // SSE 实时接收教师端催交提醒（失败时由轮询兜底）
+  useEffect(() => {
+    if (!classId || typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+
+    const eventSource = new EventSource(`/api/reminder/stream?classId=${classId}`);
+    let closedByCleanup = false;
+
+    eventSource.addEventListener('ready', () => {
+      sseConnectedRef.current = true;
+      setReminderChannelStatus('sse');
+    });
+
+    eventSource.addEventListener('reminder', (event) => {
+      try {
+        const parsed = JSON.parse((event as MessageEvent).data) as { id?: string; message?: string };
+        handleIncomingReminder(parsed);
+      } catch {
+        // Ignore malformed reminder payload.
+      }
+    });
+
+    eventSource.onerror = () => {
+      sseConnectedRef.current = false;
+      setReminderChannelStatus('polling');
+      if (!closedByCleanup) {
+        eventSource.close();
+      }
+    };
+
+    return () => {
+      closedByCleanup = true;
+      sseConnectedRef.current = false;
+      setReminderChannelStatus('polling');
+      eventSource.close();
+    };
+  }, [classId, handleIncomingReminder]);
+
+  // 轮询兜底：SSE 不可用/未连接时继续工作
   useEffect(() => {
     if (!classId) return;
 
@@ -266,26 +561,15 @@ function ScannerContent() {
 
     async function pollReminder() {
       try {
+        if (typeof EventSource !== 'undefined' && sseConnectedRef.current) return;
         const response = await fetch(`/api/reminder?classId=${classId}`, {
           cache: 'no-store',
         });
         if (!response.ok || cancelled) return;
+        setReminderChannelStatus('polling');
         const payload = await response.json();
         const record = payload?.data as { id?: string; message?: string } | null;
-        if (!record?.id || !record.message) return;
-        if (record.id === dismissedReminderId) return;
-        setReminderId(record.id);
-        setReminderText(record.message);
-        if (lastPlayedReminderIdRef.current !== record.id) {
-          lastPlayedReminderIdRef.current = record.id;
-          const times = Math.max(1, Math.min(5, reminderBroadcastTimes));
-          for (let i = 0; i < times; i++) {
-            window.setTimeout(() => {
-              playSound('reminder');
-              speakText(`老师提醒：${record.message}`, { cancelPrevious: i === 0 });
-            }, i * 1600);
-          }
-        }
+        handleIncomingReminder(record);
       } catch {
         // Ignore reminder polling failures.
       }
@@ -298,7 +582,7 @@ function ScannerContent() {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [classId, dismissedReminderId, playSound, speakText, reminderBroadcastTimes]);
+  }, [classId, handleIncomingReminder]);
 
   // 提醒自动关闭（显示 1 分钟）
   useEffect(() => {
@@ -343,7 +627,7 @@ function ScannerContent() {
 
   return (
     <div 
-      className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex flex-col"
+      className="h-[100dvh] bg-gradient-to-br from-green-50 to-emerald-100 flex flex-col overflow-hidden"
       tabIndex={0}
       ref={(el) => el?.focus()}
     >
@@ -384,48 +668,48 @@ function ScannerContent() {
         }}
       />
 
-      {/* 主内容区 */}
-      <main className="flex-1 flex flex-col items-center justify-center p-4">
-        {/* 教师端催交提醒 */}
-        {reminderText && (
-          <div className="w-full max-w-md mb-4">
-            <Card className="border-amber-300 bg-amber-50">
-              <CardContent className="pt-4 pb-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-semibold text-amber-700 mb-1">老师提醒</p>
-                    {parsedReminder ? (
-                      <>
-                        <p className="text-sm text-amber-700">
-                          <span className="font-bold text-amber-900">【{parsedReminder.subjectName}】</span>
-                          <span> 还有 </span>
-                          <span className="font-extrabold text-amber-900">{parsedReminder.count}</span>
-                          <span> 位同学未交作业</span>
-                        </p>
-                        <p className="text-xs text-amber-700 mt-1">
-                          未交名单：{parsedReminder.names}
-                        </p>
-                      </>
-                    ) : (
-                      <p className="text-sm text-amber-700">{reminderText}</p>
-                    )}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setDismissedReminderId(reminderId);
-                      setReminderText(null);
-                    }}
-                  >
-                    关闭
-                  </Button>
+      {/* 悬浮提醒（防止挤压主布局） */}
+      {reminderText && (
+        <div className="fixed top-20 left-1/2 z-40 w-[min(680px,92vw)] -translate-x-1/2">
+          <Card className="border-amber-300 bg-amber-50 shadow-lg">
+            <CardContent className="pt-4 pb-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold text-amber-700 mb-1">老师提醒</p>
+                  {parsedReminder ? (
+                    <>
+                      <p className="text-sm text-amber-700">
+                        <span className="font-bold text-amber-900">【{parsedReminder.subjectName}】</span>
+                        <span> 还有 </span>
+                        <span className="font-extrabold text-amber-900">{parsedReminder.count}</span>
+                        <span> 位同学未交作业</span>
+                      </p>
+                      <p className="text-xs text-amber-700 mt-1">
+                        未交名单：{parsedReminder.names}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-amber-700">{reminderText}</p>
+                  )}
                 </div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setDismissedReminderId(reminderId);
+                    setReminderText(null);
+                  }}
+                >
+                  关闭
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
+      {/* 主内容区 */}
+      <main className="flex-1 flex flex-col items-center justify-center p-3 md:p-4 overflow-y-auto">
         {/* 扫描动画区域 */}
         <div className="relative w-full max-w-md">
           <div className="aspect-square bg-white rounded-3xl shadow-xl flex flex-col items-center justify-center relative overflow-hidden">
@@ -480,57 +764,35 @@ function ScannerContent() {
         )}
 
         {/* 提示信息 */}
-        <div className="mt-8 text-center text-gray-500">
+        <div className="mt-4 md:mt-8 text-center text-gray-500 w-full max-w-md">
           <p className="text-sm">系统支持自动识别扫码枪输入</p>
           <p className="text-xs mt-1">也可直接在此页面输入二维码编号</p>
+          {cameraCapable && (
+            <div className="mt-3">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setCameraStatusText('准备扫码');
+                  setCameraPanelOpen((prev) => !prev);
+                }}
+              >
+                {cameraPanelOpen ? '关闭摄像头扫码' : '使用摄像头扫码'}
+              </Button>
+            </div>
+          )}
+          {cameraCapable && cameraPanelOpen && (
+            <div className="mt-3 w-full max-w-md mx-auto rounded-lg border bg-white p-3">
+              <video
+                ref={cameraVideoRef}
+                className="w-full rounded-md bg-black"
+                playsInline
+                muted
+                autoPlay
+              />
+              <p className="text-xs text-gray-600 mt-2">{cameraStatusText}</p>
+            </div>
+          )}
         </div>
-
-        {/* Debug: 手动输入作业码（仅 NEXT_PUBLIC_APP_MODE=debug 时显示） */}
-        {debugFeatureEnabled && (
-          <div className="mt-6 w-full max-w-md">
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">调试模式</CardTitle>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setDebugMode((prev) => !prev)}
-                  >
-                    {debugMode ? '关闭' : '开启'}
-                  </Button>
-                </div>
-              </CardHeader>
-              {debugMode && (
-                <CardContent>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={manualCode}
-                      onChange={(e) => setManualCode(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && manualCode.trim() && !scanning) {
-                          handleScanInput(manualCode);
-                        }
-                      }}
-                      placeholder="例如: Class_1_Subject_1_Student_1"
-                      className="flex-1 h-10 rounded-md border border-input bg-background px-3 text-sm"
-                    />
-                    <Button
-                      onClick={() => handleScanInput(manualCode)}
-                      disabled={!manualCode.trim() || scanning}
-                    >
-                      提交
-                    </Button>
-                  </div>
-                  <p className="mt-2 text-xs text-gray-500">
-                    仅用于本地联调；可通过 URL 参数 <code>?debug=1</code> 进入页面时自动开启。
-                  </p>
-                </CardContent>
-              )}
-            </Card>
-          </div>
-        )}
       </main>
 
       {/* 底部状态栏 */}
@@ -541,6 +803,16 @@ function ScannerContent() {
             <span>等待扫码</span>
           </div>
           <div className="flex items-center gap-4">
+            <div className="flex items-center gap-1.5">
+              <span
+                className={`inline-block w-2 h-2 rounded-full ${
+                  reminderChannelStatus === 'sse' ? 'bg-green-500' : 'bg-amber-500'
+                }`}
+              />
+              <span className="text-xs text-gray-600">
+                {reminderChannelStatus === 'sse' ? '提醒通道：实时连接' : '提醒通道：轮询兜底'}
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               <Switch
                 id="voice-switch"

@@ -118,6 +118,10 @@ export const systemConfigs = pgTable(
     scan_start_time: varchar("scan_start_time", { length: 5 }).notNull().default("07:00"), // HH:mm 格式
     scan_end_time: varchar("scan_end_time", { length: 5 }).notNull().default("12:00"), // HH:mm 格式
     alert_continuous_days: integer("alert_continuous_days").notNull().default(3), // 预警连续天数
+    reminder_broadcast_times: integer("reminder_broadcast_times").notNull().default(1), // 教师催交播报次数
+    reminder_schedule_times: text("reminder_schedule_times"), // 定时催交时间点（逗号分隔 HH:mm）
+    reminder_poll_interval_minutes: integer("reminder_poll_interval_minutes").notNull().default(5), // 定时任务轮询间隔（分钟）
+    student_reminder_voice_enabled: boolean("student_reminder_voice_enabled").notNull().default(true), // 学生端教师提醒语音开关
     global_task_status: varchar("global_task_status", { length: 20 }).notNull().default("semester"), // semester / vacation
     today_override_date: varchar("today_override_date", { length: 10 }), // 今日覆盖日期
     today_override_status: varchar("today_override_status", { length: 20 }).default("auto"), // auto / force_open / force_close

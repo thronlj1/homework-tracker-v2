@@ -8,12 +8,58 @@ import {
   getTodayDate,
 } from '@/lib/database';
 
-const JOB_INTERVAL_MS = 30 * 60 * 1000;
 const sentReminderKeys = new Set<string>();
+const scheduledBroadcastKeys = new Set<string>();
 let running = false;
+let scheduleTimer: ReturnType<typeof setTimeout> | null = null;
 
 function shouldRunForClass(scanEndTime: string): boolean {
   return getCurrentTime() > scanEndTime;
+}
+
+function parseReminderScheduleTimes(value: string | null | undefined): string[] {
+  if (!value) return [];
+  const pattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+  return Array.from(
+    new Set(
+      value
+        .split(',')
+        .map((item) => item.trim())
+        .filter((item) => pattern.test(item))
+    )
+  ).sort();
+}
+
+function getPollIntervalMs(value: number | null | undefined): number {
+  const minutes = Number.isFinite(value) ? Math.max(1, Math.min(60, Number(value))) : 5;
+  return minutes * 60 * 1000;
+}
+
+function getDueScheduleTimes(
+  scheduleTimes: string[],
+  nowMs: number,
+  lookbackMs: number
+): string[] {
+  if (scheduleTimes.length === 0) return [];
+
+  const now = new Date(nowMs);
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const day = now.getDate();
+  const lowerBoundMs = nowMs - Math.max(60_000, lookbackMs);
+  const due: string[] = [];
+
+  for (const time of scheduleTimes) {
+    const [hourStr, minuteStr] = time.split(':');
+    const hour = Number(hourStr);
+    const minute = Number(minuteStr);
+    if (!Number.isFinite(hour) || !Number.isFinite(minute)) continue;
+    const slotMs = new Date(year, month, day, hour, minute, 0, 0).getTime();
+    if (slotMs > lowerBoundMs && slotMs <= nowMs) {
+      due.push(time);
+    }
+  }
+  return due;
 }
 
 function buildReminderText(params: {
@@ -86,6 +132,18 @@ async function sendDingTalkActionCard(
   }
 }
 
+async function publishStudentReminder(baseUrl: string, classId: number, message: string): Promise<void> {
+  const response = await fetch(`${baseUrl}/api/reminder`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ classId, message }),
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`发布学生端提醒失败: HTTP ${response.status} ${body}`);
+  }
+}
+
 export async function runHomeworkDeadlineJob(baseUrl: string): Promise<void> {
   return runHomeworkDeadlineJobWithOptions(baseUrl);
 }
@@ -101,13 +159,25 @@ export async function runHomeworkDeadlineJobWithOptions(
   options: HomeworkDeadlineJobOptions = {}
 ): Promise<void> {
   const webhook = process.env.DINGTALK_ROBOT_WEBHOOK;
-  if (!webhook) return;
   if (running) return;
   running = true;
 
   try {
+    const nowMs = Date.now();
     const today = getTodayDate();
     const classes = await getClasses();
+    const globalConfig = await getSystemConfig();
+    const scheduleTimes = parseReminderScheduleTimes(globalConfig?.reminder_schedule_times);
+    const pollIntervalMs = getPollIntervalMs(globalConfig?.reminder_poll_interval_minutes);
+    const dueScheduleTimes = options.force
+      ? []
+      : getDueScheduleTimes(scheduleTimes, nowMs, pollIntervalMs + 15_000);
+    const shouldRunScheduledBroadcast = dueScheduleTimes.length > 0;
+    if (shouldRunScheduledBroadcast) {
+      console.log(
+        `[scheduled-reminder] hit slots=${dueScheduleTimes.join(',')} now=${new Date(nowMs).toISOString()}`
+      );
+    }
 
     for (const classItem of classes) {
       if (options.onlyClassId && classItem.id !== options.onlyClassId) {
@@ -116,7 +186,8 @@ export async function runHomeworkDeadlineJobWithOptions(
       const config = await getSystemConfig(classItem.id);
       if (config?.global_task_status === 'vacation') continue;
       const scanEndTime = config?.scan_end_time ?? '12:00';
-      if (!options.force && !shouldRunForClass(scanEndTime)) continue;
+      const shouldRunDeadlineReminder = Boolean(webhook) && (options.force || shouldRunForClass(scanEndTime));
+      if (!shouldRunDeadlineReminder && !shouldRunScheduledBroadcast) continue;
 
       const [subjects, students] = await Promise.all([
         getSubjectsByClass(classItem.id),
@@ -132,26 +203,42 @@ export async function runHomeworkDeadlineJobWithOptions(
           .filter((s) => s.status === 'not_submitted')
           .map((s) => s.student_name);
 
-        // 每天每班级每科只推送一次，避免半小时轮询反复轰炸
-        const sentKey = `${today}:${classItem.id}:${subject.id}`;
-        if (!options.ignoreDedup && sentReminderKeys.has(sentKey)) continue;
+        if (shouldRunDeadlineReminder) {
+          if (!webhook) continue;
+          // 每天每班级每科只推送一次，避免轮询反复轰炸
+          const sentKey = `${today}:${classItem.id}:${subject.id}`;
+          if (!options.ignoreDedup && sentReminderKeys.has(sentKey)) continue;
 
-        const title = `作业提醒 ${classItem.name}-${subject.name}`;
-        const { text, reminderUrl, triggerUrl } = buildReminderText({
-          className: classItem.name,
-          classId: classItem.id,
-          subjectName: subject.name,
-          subjectId: subject.id,
-          total: students.length,
-          submitted,
-          exempted,
-          notSubmittedNames,
-          baseUrl,
-        });
+          const title = `作业提醒 ${classItem.name}-${subject.name}`;
+          const { text, reminderUrl, triggerUrl } = buildReminderText({
+            className: classItem.name,
+            classId: classItem.id,
+            subjectName: subject.name,
+            subjectId: subject.id,
+            total: students.length,
+            submitted,
+            exempted,
+            notSubmittedNames,
+            baseUrl,
+          });
 
-        await sendDingTalkActionCard(webhook, title, text, reminderUrl, triggerUrl);
-        if (!options.ignoreDedup) {
-          sentReminderKeys.add(sentKey);
+          await sendDingTalkActionCard(webhook, title, text, reminderUrl, triggerUrl);
+          if (!options.ignoreDedup) {
+            sentReminderKeys.add(sentKey);
+          }
+        }
+
+        if (shouldRunScheduledBroadcast && notSubmittedNames.length > 0) {
+          const message = `定时催交 ${subject.name}还有 ${notSubmittedNames.length} 位同学未交：${notSubmittedNames.join('、')}。请尽快提交。`;
+          for (const dueTime of dueScheduleTimes) {
+            const scheduleKey = `${today}:${classItem.id}:${subject.id}:${dueTime}`;
+            if (scheduledBroadcastKeys.has(scheduleKey)) continue;
+            await publishStudentReminder(baseUrl, classItem.id, message);
+            console.log(
+              `[scheduled-reminder] published class=${classItem.id} subject=${subject.id} due=${dueTime} notSubmitted=${notSubmittedNames.length}`
+            );
+            scheduledBroadcastKeys.add(scheduleKey);
+          }
         }
       }
     }
@@ -162,6 +249,11 @@ export async function runHomeworkDeadlineJobWithOptions(
         sentReminderKeys.delete(key);
       }
     }
+    for (const key of Array.from(scheduledBroadcastKeys)) {
+      if (!key.startsWith(`${today}:`)) {
+        scheduledBroadcastKeys.delete(key);
+      }
+    }
   } catch (error) {
     console.error('Homework deadline job failed:', error);
   } finally {
@@ -170,13 +262,27 @@ export async function runHomeworkDeadlineJobWithOptions(
 }
 
 export function startHomeworkDeadlineJob(baseUrl: string): void {
-  runHomeworkDeadlineJob(baseUrl).catch((error) => {
-    console.error('Initial homework deadline scan failed:', error);
-  });
-
-  setInterval(() => {
-    runHomeworkDeadlineJob(baseUrl).catch((error) => {
+  const runLoop = async () => {
+    try {
+      await runHomeworkDeadlineJob(baseUrl);
+    } catch (error) {
       console.error('Scheduled homework deadline scan failed:', error);
-    });
-  }, JOB_INTERVAL_MS);
+    } finally {
+      try {
+        const config = await getSystemConfig();
+        const delayMs = getPollIntervalMs(config?.reminder_poll_interval_minutes);
+        if (scheduleTimer) clearTimeout(scheduleTimer);
+        scheduleTimer = setTimeout(() => {
+          void runLoop();
+        }, delayMs);
+      } catch (error) {
+        console.error('Failed to schedule next homework deadline scan:', error);
+        scheduleTimer = setTimeout(() => {
+          void runLoop();
+        }, 5 * 60 * 1000);
+      }
+    }
+  };
+
+  void runLoop();
 }

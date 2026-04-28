@@ -79,6 +79,9 @@ create table if not exists public.system_configs (
   scan_end_time varchar(5) not null default '12:00',
   alert_continuous_days int not null default 3,
   reminder_broadcast_times int not null default 1,
+  reminder_schedule_times text,
+  reminder_poll_interval_minutes int not null default 5,
+  student_reminder_voice_enabled boolean not null default true,
   global_task_status varchar(20) not null default 'semester',
   today_override_date varchar(10),
   today_override_status varchar(20) default 'auto',
@@ -88,6 +91,15 @@ create table if not exists public.system_configs (
 
 alter table public.system_configs
 add column if not exists reminder_broadcast_times int not null default 1;
+
+alter table public.system_configs
+add column if not exists reminder_schedule_times text;
+
+alter table public.system_configs
+add column if not exists reminder_poll_interval_minutes int not null default 5;
+
+alter table public.system_configs
+add column if not exists student_reminder_voice_enabled boolean not null default true;
 
 -- Upgrade path: ensure duplicate submissions are prevented at DB level.
 drop index if exists public.homework_records_unique_idx;
@@ -116,5 +128,10 @@ select null
 where not exists (
   select 1 from public.system_configs where class_id is null
 );
+
+-- Dev testing default: current global polling interval set to 1 minute.
+update public.system_configs
+set reminder_poll_interval_minutes = 1
+where class_id is null;
 
 commit;

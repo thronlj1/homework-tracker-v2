@@ -14,6 +14,27 @@ coze dev
 
 开发服务器支持热更新，修改代码后页面会自动刷新。
 
+### 本地 HTTPS（手机摄像头调试）
+
+移动端浏览器调用摄像头通常要求 `https`。本项目提供了最小本地 HTTPS 代理脚本：
+
+```bash
+# 1) 启动业务服务（5001）
+pnpm dev:5001
+
+# 2) 生成本地证书（把 IP 换成你的局域网 IP）
+pnpm https:cert -- 192.168.x.x
+
+# 3) 启动 HTTPS 代理（默认 5443 -> 5001）
+pnpm https:proxy
+```
+
+手机访问：
+
+`https://<你的局域网IP>:5443/student/scanner?classId=<班级ID>`
+
+注意：iPhone 需要先安装并信任 mkcert 根证书，可通过 `mkcert -CAROOT` 查看根证书目录。
+
 ### 构建生产版本
 
 ```bash
