@@ -500,8 +500,13 @@ function ScannerContent() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const isMobileLike = /Android|iPhone|iPad|iPod|Windows Phone/i.test(window.navigator.userAgent);
-    const canUseCamera = Boolean(isMobileLike);
+    const userAgent = window.navigator.userAgent;
+    const isMobileLike = /Android|iPhone|iPad|iPod|Windows Phone/i.test(userAgent);
+    // iPadOS (desktop UA) may report as MacIntel, so touch capability is a stronger signal.
+    const isIPadOSDesktopUA =
+      window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1;
+    const hasMediaDevices = Boolean(window.navigator.mediaDevices?.getUserMedia);
+    const canUseCamera = Boolean((isMobileLike || isIPadOSDesktopUA) && hasMediaDevices);
     setCameraCapable(canUseCamera);
   }, []);
 
