@@ -360,25 +360,27 @@ function DashboardContent() {
       <main className="max-w-4xl mx-auto p-4">
         <div className="mb-6">
           <h2 className="text-lg font-semibold text-gray-700 mb-3">今日作业进度</h2>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
             {stats.subjects.map((subject) => (
               <Card 
                 key={subject.subject_id}
-                className={`cursor-pointer transition-all hover:shadow-md ${
+                className={`h-full cursor-pointer transition-all hover:shadow-md ${
                   selectedSubject === subject.subject_id ? 'ring-2 ring-purple-500' : ''
                 }`}
                 onClick={() => setSelectedSubject(subject.subject_id)}
               >
-                <CardContent className="p-3 text-center">
-                  <p className="text-xs text-gray-500 mb-1">{subject.subject_name}</p>
-                  <p className="text-xl font-bold text-purple-600">{subject.percentage}%</p>
-                  <p className="text-[11px] text-gray-400 mt-1">
-                    {subject.submitted + subject.exempted}/{subject.total}
-                  </p>
+                <CardContent className="p-3 text-center h-full flex flex-col">
+                  <div className="flex-1 flex flex-col items-center justify-center">
+                    <p className="text-xs text-gray-500 mb-1">{subject.subject_name}</p>
+                    <p className="text-xl font-bold text-purple-600">{subject.percentage}%</p>
+                    <p className="text-[11px] text-gray-400 mt-1">
+                      {subject.submitted + subject.exempted}/{subject.total}
+                    </p>
+                  </div>
                   <Button
                     size="sm"
                     variant={selectedSubject === subject.subject_id ? 'default' : 'outline'}
-                    className="mt-2 h-7 px-2 text-[11px]"
+                    className="mt-2 h-7 px-2 text-[11px] w-full"
                     disabled={remindingSubjectId === subject.subject_id}
                     onClick={(e) => {
                       e.stopPropagation();
