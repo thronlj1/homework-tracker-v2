@@ -19,9 +19,6 @@ function ScannerContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const classId = parseInt(searchParams.get('classId') || '0', 10);
-  const appMode = process.env.NEXT_PUBLIC_APP_MODE ?? 'prod';
-  const debugFeatureEnabled = appMode === 'debug';
-  const debugFromQuery = debugFeatureEnabled && searchParams.get('debug') === '1';
   
   const [classInfo, setClassInfo] = useState<Class | null>(null);
   const [timeGuard, setTimeGuard] = useState<TimeGuardStatus | null>(null);
@@ -29,8 +26,6 @@ function ScannerContent() {
   const [scanning, setScanning] = useState(false);
   const [lastResult, setLastResult] = useState<SubmitResult | null>(null);
   const [inputBuffer, setInputBuffer] = useState('');
-  const [debugMode, setDebugMode] = useState(debugFromQuery);
-  const [manualCode, setManualCode] = useState('');
   const [reminderText, setReminderText] = useState<string | null>(null);
   const [reminderId, setReminderId] = useState<string | null>(null);
   const [dismissedReminderId, setDismissedReminderId] = useState<string | null>(null);
@@ -38,14 +33,6 @@ function ScannerContent() {
   const [cameraCapable, setCameraCapable] = useState(false);
   const [cameraPanelOpen, setCameraPanelOpen] = useState(false);
   const [cameraStatusText, setCameraStatusText] = useState('准备扫码');
-  const [isMobileDevice, setIsMobileDevice] = useState(false);
-  const [cameraDebugInfo, setCameraDebugInfo] = useState<{
-    mobileLike: boolean;
-    secureContext: boolean;
-    hasMediaDevices: boolean;
-    hasGetUserMedia: boolean;
-    hasBarcodeDetector: boolean;
-  } | null>(null);
   const [reminderChannelStatus, setReminderChannelStatus] = useState<'sse' | 'polling'>('polling');
   const lastPlayedReminderIdRef = useRef<string | null>(null);
   const reminderBroadcastTimesRef = useRef(1);
@@ -270,7 +257,6 @@ function ScannerContent() {
     } finally {
       setScanning(false);
       setInputBuffer('');
-      setManualCode('');
     }
   }, [classId, playSound, speakText]);
 
@@ -386,6 +372,9 @@ function ScannerContent() {
     function handleKeyDown(e: KeyboardEvent) {
       // 如果系统锁定，不处理输入
       if (timeGuard && !timeGuard.allowed) return;
+
+      // 忽略组合键，避免 Ctrl/Cmd+V 的 "v" 被当成扫码内容提交
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       
       // 忽略输入框内的按键
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
@@ -422,6 +411,20 @@ function ScannerContent() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [inputBuffer, timeGuard, handleScanInput]);
+
+  // 支持直接粘贴学生码到页面任意位置后提交
+  useEffect(() => {
+    function handlePaste(e: ClipboardEvent) {
+      if (timeGuard && !timeGuard.allowed) return;
+      const pasted = e.clipboardData?.getData('text')?.trim() ?? '';
+      if (!pasted || scanning) return;
+      e.preventDefault();
+      void handleScanInput(pasted);
+    }
+
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [timeGuard, scanning, handleScanInput]);
 
   // 加载数据
   useEffect(() => {
@@ -498,21 +501,9 @@ function ScannerContent() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const isMobileLike = /Android|iPhone|iPad|iPod|Windows Phone/i.test(window.navigator.userAgent);
-    setIsMobileDevice(isMobileLike);
-    const hasMediaDevices = Boolean(navigator.mediaDevices);
-    const hasGetUserMedia = Boolean(navigator.mediaDevices?.getUserMedia);
-    const hasBarcodeDetector = Boolean(getBarcodeDetectorCtor());
-    const secureContext = Boolean(window.isSecureContext);
-    setCameraDebugInfo({
-      mobileLike: isMobileLike,
-      secureContext,
-      hasMediaDevices,
-      hasGetUserMedia,
-      hasBarcodeDetector,
-    });
     const canUseCamera = Boolean(isMobileLike);
     setCameraCapable(canUseCamera);
-  }, [getBarcodeDetectorCtor]);
+  }, []);
 
   useEffect(() => {
     if (cameraPanelOpen) {
@@ -677,48 +668,48 @@ function ScannerContent() {
         }}
       />
 
+      {/* 悬浮提醒（防止挤压主布局） */}
+      {reminderText && (
+        <div className="fixed top-20 left-1/2 z-40 w-[min(680px,92vw)] -translate-x-1/2">
+          <Card className="border-amber-300 bg-amber-50 shadow-lg">
+            <CardContent className="pt-4 pb-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold text-amber-700 mb-1">老师提醒</p>
+                  {parsedReminder ? (
+                    <>
+                      <p className="text-sm text-amber-700">
+                        <span className="font-bold text-amber-900">【{parsedReminder.subjectName}】</span>
+                        <span> 还有 </span>
+                        <span className="font-extrabold text-amber-900">{parsedReminder.count}</span>
+                        <span> 位同学未交作业</span>
+                      </p>
+                      <p className="text-xs text-amber-700 mt-1">
+                        未交名单：{parsedReminder.names}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-sm text-amber-700">{reminderText}</p>
+                  )}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setDismissedReminderId(reminderId);
+                    setReminderText(null);
+                  }}
+                >
+                  关闭
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
       {/* 主内容区 */}
       <main className="flex-1 flex flex-col items-center justify-center p-3 md:p-4 overflow-y-auto">
-        {/* 教师端催交提醒 */}
-        {reminderText && (
-          <div className="w-full max-w-md mb-4">
-            <Card className="border-amber-300 bg-amber-50">
-              <CardContent className="pt-4 pb-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-semibold text-amber-700 mb-1">老师提醒</p>
-                    {parsedReminder ? (
-                      <>
-                        <p className="text-sm text-amber-700">
-                          <span className="font-bold text-amber-900">【{parsedReminder.subjectName}】</span>
-                          <span> 还有 </span>
-                          <span className="font-extrabold text-amber-900">{parsedReminder.count}</span>
-                          <span> 位同学未交作业</span>
-                        </p>
-                        <p className="text-xs text-amber-700 mt-1">
-                          未交名单：{parsedReminder.names}
-                        </p>
-                      </>
-                    ) : (
-                      <p className="text-sm text-amber-700">{reminderText}</p>
-                    )}
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setDismissedReminderId(reminderId);
-                      setReminderText(null);
-                    }}
-                  >
-                    关闭
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        )}
-
         {/* 扫描动画区域 */}
         <div className="relative w-full max-w-md">
           <div className="aspect-square bg-white rounded-3xl shadow-xl flex flex-col items-center justify-center relative overflow-hidden">
@@ -801,61 +792,7 @@ function ScannerContent() {
               <p className="text-xs text-gray-600 mt-2">{cameraStatusText}</p>
             </div>
           )}
-          {debugFromQuery && cameraDebugInfo && (
-            <div className="mt-3 rounded-md border bg-white/80 p-2 text-left text-[11px] text-gray-600">
-              <p>设备调试：mobile={String(cameraDebugInfo.mobileLike)} secure={String(cameraDebugInfo.secureContext)}</p>
-              <p>mediaDevices={String(cameraDebugInfo.hasMediaDevices)} getUserMedia={String(cameraDebugInfo.hasGetUserMedia)}</p>
-              <p>barcodeDetector={String(cameraDebugInfo.hasBarcodeDetector)}</p>
-            </div>
-          )}
         </div>
-
-        {/* Debug: 手动输入作业码（仅 NEXT_PUBLIC_APP_MODE=debug 时显示） */}
-        {debugFeatureEnabled && (!isMobileDevice || debugFromQuery) && (
-          <div className="mt-6 w-full max-w-md">
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-base">调试模式</CardTitle>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setDebugMode((prev) => !prev)}
-                  >
-                    {debugMode ? '关闭' : '开启'}
-                  </Button>
-                </div>
-              </CardHeader>
-              {debugMode && (
-                <CardContent>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={manualCode}
-                      onChange={(e) => setManualCode(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && manualCode.trim() && !scanning) {
-                          handleScanInput(manualCode);
-                        }
-                      }}
-                      placeholder="例如: Class_1_Subject_1_Student_1"
-                      className="flex-1 h-10 rounded-md border border-input bg-background px-3 text-sm"
-                    />
-                    <Button
-                      onClick={() => handleScanInput(manualCode)}
-                      disabled={!manualCode.trim() || scanning}
-                    >
-                      提交
-                    </Button>
-                  </div>
-                  <p className="mt-2 text-xs text-gray-500">
-                    仅用于本地联调；可通过 URL 参数 <code>?debug=1</code> 进入页面时自动开启。
-                  </p>
-                </CardContent>
-              )}
-            </Card>
-          </div>
-        )}
       </main>
 
       {/* 底部状态栏 */}

@@ -37,6 +37,7 @@ function DashboardContent() {
   const [selectedStudent, setSelectedStudent] = useState<StudentStatus | null>(null);
   const [teacherReminderVoiceEnabled, setTeacherReminderVoiceEnabled] = useState(true);
   const [voiceToggleSaving, setVoiceToggleSaving] = useState(false);
+  const [remindingSubjectId, setRemindingSubjectId] = useState<number | null>(null);
   const latestStatusRequestRef = useRef(0);
 
   const today = getTodayDate();
@@ -181,24 +182,37 @@ function DashboardContent() {
 
     const subjectStats = stats.subjects.find(s => s.subject_id === subjectId);
     if (!subjectStats) return;
+    if (remindingSubjectId === subjectId) return;
 
-    let statuses = studentStatuses;
-    if (selectedSubject !== subjectId) {
-      statuses = await getStudentStatuses(classId, subjectId, today);
+    setRemindingSubjectId(subjectId);
+    try {
+      // 每次点击都直接拉取该科目最新名单，避免依赖页面刷新后的本地缓存状态。
+      const statuses = await getStudentStatuses(classId, subjectId, today);
+      const notSubmitted = statuses.filter(s => s.status === 'not_submitted');
+      if (notSubmitted.length === 0) {
+        toast.info(`${subjectStats.subject_name} 当前无人未交`);
+        return;
+      }
+
+      const names = notSubmitted.map(s => s.student_name).join('、');
+      const response = await fetch('/api/reminder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          classId,
+          message: `${subjectStats.subject_name}还有 ${notSubmitted.length} 位同学未交：${names}。请尽快提交。`,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.message || '发送催交失败');
+      }
+      toast.success(`已发送${subjectStats.subject_name}催交提醒（${notSubmitted.length} 人未交）`);
+    } catch {
+      toast.error('催交发送失败，请重试');
+    } finally {
+      setRemindingSubjectId(null);
     }
-    const notSubmitted = statuses.filter(s => s.status === 'not_submitted');
-    if (notSubmitted.length === 0) return;
-
-    const names = notSubmitted.map(s => s.student_name).join('、');
-    await fetch('/api/reminder', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        classId,
-        message: `${subjectStats.subject_name}还有 ${notSubmitted.length} 位同学未交：${names}。请尽快提交。`,
-      }),
-    });
-    toast.success(`已发送${subjectStats.subject_name}催交提醒（${notSubmitted.length} 人未交）`);
   }
 
   function escapeCsvCell(value: string): string {
@@ -365,13 +379,14 @@ function DashboardContent() {
                     size="sm"
                     variant={selectedSubject === subject.subject_id ? 'default' : 'outline'}
                     className="mt-2 h-7 px-2 text-[11px]"
+                    disabled={remindingSubjectId === subject.subject_id}
                     onClick={(e) => {
                       e.stopPropagation();
                       setSelectedSubject(subject.subject_id);
-                      handleSendReminder(subject.subject_id);
+                      void handleSendReminder(subject.subject_id);
                     }}
                   >
-                    一键催交
+                    {remindingSubjectId === subject.subject_id ? '发送中...' : '一键催交'}
                   </Button>
                 </CardContent>
               </Card>
