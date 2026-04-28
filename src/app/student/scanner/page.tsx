@@ -34,7 +34,9 @@ function ScannerContent() {
   const [cameraPanelOpen, setCameraPanelOpen] = useState(false);
   const [cameraStatusText, setCameraStatusText] = useState('准备扫码');
   const [reminderChannelStatus, setReminderChannelStatus] = useState<'sse' | 'polling'>('polling');
+  const [desktopNotifyEnabled, setDesktopNotifyEnabled] = useState(true);
   const lastPlayedReminderIdRef = useRef<string | null>(null);
+  const lastNotifiedReminderIdRef = useRef<string | null>(null);
   const reminderBroadcastTimesRef = useRef(1);
   const teacherReminderVoiceEnabledRef = useRef(true);
   const reminderQueueRef = useRef<Array<{ id: string; message: string; times: number }>>([]);
@@ -203,8 +205,29 @@ function ScannerContent() {
         queuedReminderIdsRef.current.add(record.id);
         void processReminderQueue();
       }
+
+      if (
+        desktopNotifyEnabled &&
+        record.id !== lastNotifiedReminderIdRef.current &&
+        typeof window !== 'undefined' &&
+        'Notification' in window &&
+        Notification.permission === 'granted'
+      ) {
+        const shouldNotifyWhenHidden = document.visibilityState === 'hidden';
+        if (shouldNotifyWhenHidden) {
+          const notice = new Notification('老师提醒', {
+            body: record.message,
+            tag: `teacher-reminder-${record.id}`,
+          });
+          notice.onclick = () => {
+            window.focus();
+            notice.close();
+          };
+        }
+      }
+      lastNotifiedReminderIdRef.current = record.id;
     },
-    [dismissedReminderId, processReminderQueue]
+    [desktopNotifyEnabled, dismissedReminderId, processReminderQueue]
   );
 
   const refreshReminderBroadcastTimes = useCallback(async () => {
@@ -497,6 +520,31 @@ function ScannerContent() {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem('student_voice_enabled', voiceEnabled ? '1' : '0');
   }, [voiceEnabled]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const stored = window.localStorage.getItem('student_desktop_notify_enabled');
+    if (stored !== null) {
+      setDesktopNotifyEnabled(stored === '1');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('student_desktop_notify_enabled', desktopNotifyEnabled ? '1' : '0');
+  }, [desktopNotifyEnabled]);
+
+  useEffect(() => {
+    if (
+      !desktopNotifyEnabled ||
+      typeof window === 'undefined' ||
+      !('Notification' in window) ||
+      Notification.permission !== 'default'
+    ) {
+      return;
+    }
+    void Notification.requestPermission();
+  }, [desktopNotifyEnabled]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -821,6 +869,16 @@ function ScannerContent() {
               />
               <label htmlFor="voice-switch" className="text-xs text-gray-600 cursor-pointer">
                 语音播报
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch
+                id="desktop-notify-switch"
+                checked={desktopNotifyEnabled}
+                onCheckedChange={setDesktopNotifyEnabled}
+              />
+              <label htmlFor="desktop-notify-switch" className="text-xs text-gray-600 cursor-pointer">
+                桌面通知
               </label>
             </div>
             <div>

@@ -2,6 +2,7 @@
   "name": "projects",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.cjs",
   "scripts": {
     "build": "bash ./scripts/build.sh",
     "dev": "bash ./scripts/dev.sh",
@@ -10,6 +11,8 @@
     "https:proxy": "bash ./scripts/start-https-proxy.sh",
     "desktop:start": "electron electron/main.cjs",
     "desktop:start:scanner": "ELECTRON_START_URL=http://localhost:5000/student/scanner electron electron/main.cjs",
+    "desktop:build:mac": "electron-builder --mac dmg",
+    "desktop:build:win": "electron-builder --win nsis",
     "preinstall": "npx only-allow pnpm",
     "lint": "eslint",
     "start": "bash ./scripts/start.sh",
@@ -83,6 +86,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "electron": "^41.3.0",
+    "electron-builder": "^26.0.12",
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "local-ssl-proxy": "^2.0.5",
@@ -93,6 +97,36 @@
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5"
+  },
+  "build": {
+    "appId": "com.homeworktracker.desktop",
+    "productName": "Homework Tracker Desktop",
+    "files": [
+      "electron/**/*",
+      ".next/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist-desktop"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.education"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "public/favicon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "packageManager": "pnpm@9.0.0",
   "engines": {

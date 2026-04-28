@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const { app, BrowserWindow, Menu, Tray, nativeImage } = require('electron');
 const fs = require('fs');
 const path = require('path');
@@ -41,10 +42,22 @@ function applyLoginItemSettings() {
 }
 
 function createTrayIcon() {
+  const platformIconCandidates =
+    process.platform === 'win32'
+      ? [
+          path.join(process.cwd(), 'electron', 'assets', 'tray.ico'),
+          path.join(process.cwd(), 'electron', 'assets', 'tray.png'),
+          path.join(process.cwd(), 'public', 'favicon.ico'),
+        ]
+      : [
+          path.join(process.cwd(), 'electron', 'assets', 'trayTemplate.png'),
+          path.join(process.cwd(), 'electron', 'assets', 'trayTemplate.svg'),
+          path.join(process.cwd(), 'public', 'favicon.ico'),
+        ];
+
   const iconCandidates = [
+    ...platformIconCandidates,
     path.join(process.cwd(), 'electron', 'assets', 'trayTemplate.svg'),
-    path.join(process.cwd(), 'electron', 'assets', 'trayTemplate.png'),
-    path.join(process.cwd(), 'public', 'favicon.ico'),
   ];
 
   for (const iconPath of iconCandidates) {
@@ -69,6 +82,9 @@ function showWindow() {
 
 function createTray() {
   tray = new Tray(createTrayIcon());
+  if (process.platform === 'darwin') {
+    tray.setIgnoreDoubleClickEvents(false);
+  }
   tray.setToolTip('滴！交作业 - 学生端');
   tray.on('double-click', showWindow);
 
@@ -159,6 +175,10 @@ if (!gotLock) {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'win32') {
+    // Ensure Windows toast notifications can be routed reliably.
+    app.setAppUserModelId('com.homeworktracker.desktop');
+  }
   loadSettings();
   applyLoginItemSettings();
   createWindow();

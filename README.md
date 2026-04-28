@@ -41,6 +41,52 @@ pnpm https:proxy
 coze build
 ```
 
+### Electron 桌面端（跨平台验收）
+
+#### 1) 本地开发态回归（macOS）
+
+```bash
+# 启动业务服务
+pnpm dev
+
+# 启动 Electron 桌面端（默认打开学生扫码页）
+pnpm desktop:start
+```
+
+检查项：
+
+- 托盘图标出现，双击可唤起窗口
+- 点击窗口关闭按钮后应用不退出，仅隐藏到托盘
+- 托盘菜单“退出”可真正结束进程
+- “开机自启动”“启动后静默驻留”重启应用后状态仍保留
+
+#### 2) 后台消息与通知回归
+
+- 在窗口隐藏状态触发教师催交提醒
+- 确认提醒通道可工作（优先 SSE，失败自动轮询兜底）
+- 确认语音播报与桌面通知均可按开关生效
+- 网络短断后恢复，提醒仍可继续接收
+
+#### 3) 跨平台构建
+
+```bash
+# macOS dmg
+pnpm desktop:build:mac
+
+# Windows exe (NSIS)
+pnpm desktop:build:win
+```
+
+产物默认输出目录：`dist-desktop/`
+
+#### 4) Windows 验收建议
+
+- 先用 Whisky 做首轮 smoke test（界面、托盘、关闭行为）
+- 再用真实 Windows 10/11 设备做最终验收
+- 重点验证系统通知是否正常弹出（安装态通常比开发态更接近真实行为）
+
+说明：Whisky 仅作为预检，真实 Windows 结果为最终标准。
+
 ### 启动生产服务器
 
 ```bash
