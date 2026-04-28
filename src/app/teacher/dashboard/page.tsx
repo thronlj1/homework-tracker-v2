@@ -382,7 +382,6 @@ function DashboardContent() {
                     disabled={remindingSubjectId === subject.subject_id}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setSelectedSubject(subject.subject_id);
                       void handleSendReminder(subject.subject_id);
                     }}
                   >

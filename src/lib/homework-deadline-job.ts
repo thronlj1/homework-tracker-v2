@@ -229,7 +229,7 @@ export async function runHomeworkDeadlineJobWithOptions(
         }
 
         if (shouldRunScheduledBroadcast && notSubmittedNames.length > 0) {
-          const message = `【定时催交】${subject.name}还有 ${notSubmittedNames.length} 位同学未交：${notSubmittedNames.join('、')}。请尽快提交。`;
+          const message = `定时催交 ${subject.name}还有 ${notSubmittedNames.length} 位同学未交：${notSubmittedNames.join('、')}。请尽快提交。`;
           for (const dueTime of dueScheduleTimes) {
             const scheduleKey = `${today}:${classItem.id}:${subject.id}:${dueTime}`;
             if (scheduledBroadcastKeys.has(scheduleKey)) continue;
