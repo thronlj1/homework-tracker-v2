@@ -139,14 +139,54 @@ export async function deleteClass(id: number): Promise<void> {
 
 // ==================== 学生操作 ====================
 
-export async function getStudentsByClass(classId: number): Promise<Student[]> {
-  if (isBrowser) {
-    return apiRequest<Student[]>(`/api/students?classId=${classId}`);
+const studentCodeCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+function compareStudentCode(aCode: string, bCode: string): number {
+  const a = (aCode ?? '').trim();
+  const b = (bCode ?? '').trim();
+
+  // 纯数字学号：按数值大小比较（解决 '1' 与 '10' 的字符串字典序问题）
+  const aIsDigits = /^\d+$/.test(a);
+  const bIsDigits = /^\d+$/.test(b);
+
+  if (aIsDigits && bIsDigits) {
+    try {
+      const aNum = BigInt(a);
+      const bNum = BigInt(b);
+      if (aNum === bNum) return 0;
+      return aNum < bNum ? -1 : 1;
+    } catch {
+      // BigInt 解析失败（极端超长数字）时退回到“自然序”比较
+    }
   }
-  const client = await getSupabaseClient();
-  const { data, error } = await client.from('students').select('*').eq('class_id', classId).order('student_code');
-  if (error) throw new Error(`获取学生列表失败: ${error.message}`);
-  return data || [];
+
+  // 非纯数字或解析失败：使用自然序比较（尽量符合用户直觉）
+  return studentCodeCollator.compare(a, b);
+}
+
+function sortStudentsByStudentCode(students: Student[]): Student[] {
+  return [...students].sort((a, b) => {
+    const byCode = compareStudentCode(a.student_code, b.student_code);
+    if (byCode !== 0) return byCode;
+    // 兜底：学号相同则按 id 保持稳定
+    return a.id - b.id;
+  });
+}
+
+export async function getStudentsByClass(classId: number): Promise<Student[]> {
+  const students = isBrowser
+    ? await apiRequest<Student[]>(`/api/students?classId=${classId}`)
+    : await (async () => {
+        const client = await getSupabaseClient();
+        const { data, error } = await client
+          .from('students')
+          .select('*')
+          .eq('class_id', classId);
+        if (error) throw new Error(`获取学生列表失败: ${error.message}`);
+        return data || [];
+      })();
+
+  return sortStudentsByStudentCode(students);
 }
 
 export async function getStudentById(id: number): Promise<Student | null> {
