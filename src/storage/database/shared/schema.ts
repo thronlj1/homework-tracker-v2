@@ -1,140 +1,163 @@
-import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, boolean, integer, index, serial } from "drizzle-orm/pg-core";
+import { pgTable, index, foreignKey, pgPolicy, serial, integer, varchar, timestamp, unique, text } from "drizzle-orm/pg-core"
+import { sql } from "drizzle-orm"
 
-// ============================================
-// 1. 班级表 (classes)
-// ============================================
-export const classes = pgTable(
-  "classes",
-  {
-    id: serial().primaryKey(),
-    name: varchar("name", { length: 100 }).notNull().unique(),
-    class_image: text("class_image"), // 班级图 URL
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }),
-  },
-  (table) => [
-    index("classes_name_idx").on(table.name),
-  ]
-);
 
-// ============================================
-// 2. 学生名册表 (students)
-// ============================================
-export const students = pgTable(
-  "students",
-  {
-    id: serial().primaryKey(),
-    class_id: integer("class_id").notNull().references(() => classes.id, { onDelete: "cascade" }),
-    name: varchar("name", { length: 100 }).notNull(),
-    student_code: varchar("student_code", { length: 50 }).notNull(), // 学号/学生编号
-    avatar_image: text("avatar_image"), // 学生头像 URL
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }),
-  },
-  (table) => [
-    index("students_class_id_idx").on(table.class_id),
-    index("students_student_code_idx").on(table.student_code),
-    index("students_name_idx").on(table.name),
-  ]
-);
 
-// ============================================
-// 3. 科目表 (subjects)
-// ============================================
-export const subjects = pgTable(
-  "subjects",
-  {
-    id: serial().primaryKey(),
-    class_id: integer("class_id").notNull().references(() => classes.id, { onDelete: "cascade" }),
-    name: varchar("name", { length: 100 }).notNull(),
-    subject_image: text("subject_image"), // 科目图 URL
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }),
-  },
-  (table) => [
-    index("subjects_class_id_idx").on(table.class_id),
-    index("subjects_name_idx").on(table.name),
-  ]
-);
+export const homeworkRecords = pgTable("homework_records", {
+	id: serial().primaryKey().notNull(),
+	classId: integer("class_id").notNull(),
+	studentId: integer("student_id").notNull(),
+	subjectId: integer("subject_id").notNull(),
+	submitDate: varchar("submit_date", { length: 10 }).notNull(),
+	submitTime: timestamp("submit_time", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("homework_records_class_id_idx").using("btree", table.classId.asc().nullsLast().op("int4_ops")),
+	index("homework_records_student_id_idx").using("btree", table.studentId.asc().nullsLast().op("int4_ops")),
+	index("homework_records_subject_id_idx").using("btree", table.subjectId.asc().nullsLast().op("int4_ops")),
+	index("homework_records_submit_date_idx").using("btree", table.submitDate.asc().nullsLast().op("text_ops")),
+	index("homework_records_unique_idx").using("btree", table.studentId.asc().nullsLast().op("int4_ops"), table.subjectId.asc().nullsLast().op("int4_ops"), table.submitDate.asc().nullsLast().op("int4_ops")),
+	foreignKey({
+			columns: [table.classId],
+			foreignColumns: [classes.id],
+			name: "homework_records_class_id_classes_id_fk"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.studentId],
+			foreignColumns: [students.id],
+			name: "homework_records_student_id_students_id_fk"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.subjectId],
+			foreignColumns: [subjects.id],
+			name: "homework_records_subject_id_subjects_id_fk"
+		}).onDelete("cascade"),
+	pgPolicy("homework_records_允许公开删除", { as: "permissive", for: "delete", to: ["public"], using: sql`true` }),
+	pgPolicy("homework_records_允许公开更新", { as: "permissive", for: "update", to: ["public"] }),
+	pgPolicy("homework_records_允许公开写入", { as: "permissive", for: "insert", to: ["public"] }),
+	pgPolicy("homework_records_允许公开读取", { as: "permissive", for: "select", to: ["public"] }),
+]);
 
-// ============================================
-// 4. 作业提交流水表 (homework_records)
-// ============================================
-export const homeworkRecords = pgTable(
-  "homework_records",
-  {
-    id: serial().primaryKey(),
-    class_id: integer("class_id").notNull().references(() => classes.id, { onDelete: "cascade" }),
-    student_id: integer("student_id").notNull().references(() => students.id, { onDelete: "cascade" }),
-    subject_id: integer("subject_id").notNull().references(() => subjects.id, { onDelete: "cascade" }),
-    submit_date: varchar("submit_date", { length: 10 }).notNull(), // 格式: YYYY-MM-DD
-    submit_time: timestamp("submit_time", { withTimezone: true }).defaultNow().notNull(),
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-  },
-  (table) => [
-    index("homework_records_class_id_idx").on(table.class_id),
-    index("homework_records_student_id_idx").on(table.student_id),
-    index("homework_records_subject_id_idx").on(table.subject_id),
-    index("homework_records_submit_date_idx").on(table.submit_date),
-    // 复合索引用于唯一性检查：同一学生同一科目同一天只能提交一次
-    index("homework_records_unique_idx").on(table.student_id, table.subject_id, table.submit_date),
-  ]
-);
-
-// ============================================
-// 5. 免交/豁免记录表 (homework_exemptions)
-// ============================================
-export const homeworkExemptions = pgTable(
-  "homework_exemptions",
-  {
-    id: serial().primaryKey(),
-    class_id: integer("class_id").notNull().references(() => classes.id, { onDelete: "cascade" }),
-    student_id: integer("student_id").notNull().references(() => students.id, { onDelete: "cascade" }),
-    subject_id: integer("subject_id").notNull().references(() => subjects.id, { onDelete: "cascade" }),
-    exempt_date: varchar("exempt_date", { length: 10 }).notNull(), // 格式: YYYY-MM-DD
-    reason: varchar("reason", { length: 255 }), // 豁免原因（如：请假、体育课等）
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }),
-  },
-  (table) => [
-    index("homework_exemptions_class_id_idx").on(table.class_id),
-    index("homework_exemptions_student_id_idx").on(table.student_id),
-    index("homework_exemptions_subject_id_idx").on(table.subject_id),
-    index("homework_exemptions_date_idx").on(table.exempt_date),
-    // 复合索引用于唯一性检查
-    index("homework_exemptions_unique_idx").on(table.student_id, table.subject_id, table.exempt_date),
-  ]
-);
-
-// ============================================
-// 6. 系统配置表 (system_configs)
-// ============================================
-export const systemConfigs = pgTable(
-  "system_configs",
-  {
-    id: serial().primaryKey(),
-    class_id: integer("class_id").references(() => classes.id, { onDelete: "cascade" }), // 可空表示全局配置
-    scan_start_time: varchar("scan_start_time", { length: 5 }).notNull().default("07:00"), // HH:mm 格式
-    scan_end_time: varchar("scan_end_time", { length: 5 }).notNull().default("12:00"), // HH:mm 格式
-    alert_continuous_days: integer("alert_continuous_days").notNull().default(3), // 预警连续天数
-    reminder_broadcast_times: integer("reminder_broadcast_times").notNull().default(1), // 教师催交播报次数
-    reminder_schedule_times: text("reminder_schedule_times"), // 定时催交时间点（逗号分隔 HH:mm）
-    reminder_poll_interval_minutes: integer("reminder_poll_interval_minutes").notNull().default(5), // 定时任务轮询间隔（分钟）
-    student_reminder_voice_enabled: boolean("student_reminder_voice_enabled").notNull().default(true), // 学生端教师提醒语音开关
-    global_task_status: varchar("global_task_status", { length: 20 }).notNull().default("semester"), // semester / vacation
-    today_override_date: varchar("today_override_date", { length: 10 }), // 今日覆盖日期
-    today_override_status: varchar("today_override_status", { length: 20 }).default("auto"), // auto / force_open / force_close
-    created_at: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-    updated_at: timestamp("updated_at", { withTimezone: true }),
-  },
-  (table) => [
-    index("system_configs_class_id_idx").on(table.class_id),
-  ]
-);
-
-// 保留系统表
 export const healthCheck = pgTable("health_check", {
-  id: serial().notNull(),
-  updated_at: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+	id: serial().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 });
+
+export const classes = pgTable("classes", {
+	id: serial().primaryKey().notNull(),
+	name: varchar({ length: 100 }).notNull(),
+	classImage: text("class_image"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("classes_name_idx").using("btree", table.name.asc().nullsLast().op("text_ops")),
+	unique("classes_name_unique").on(table.name),
+	pgPolicy("classes_允许公开删除", { as: "permissive", for: "delete", to: ["public"], using: sql`true` }),
+	pgPolicy("classes_允许公开更新", { as: "permissive", for: "update", to: ["public"] }),
+	pgPolicy("classes_允许公开写入", { as: "permissive", for: "insert", to: ["public"] }),
+	pgPolicy("classes_允许公开读取", { as: "permissive", for: "select", to: ["public"] }),
+]);
+
+export const homeworkExemptions = pgTable("homework_exemptions", {
+	id: serial().primaryKey().notNull(),
+	classId: integer("class_id").notNull(),
+	studentId: integer("student_id").notNull(),
+	subjectId: integer("subject_id").notNull(),
+	exemptDate: varchar("exempt_date", { length: 10 }).notNull(),
+	reason: varchar({ length: 255 }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("homework_exemptions_class_id_idx").using("btree", table.classId.asc().nullsLast().op("int4_ops")),
+	index("homework_exemptions_date_idx").using("btree", table.exemptDate.asc().nullsLast().op("text_ops")),
+	index("homework_exemptions_student_id_idx").using("btree", table.studentId.asc().nullsLast().op("int4_ops")),
+	index("homework_exemptions_subject_id_idx").using("btree", table.subjectId.asc().nullsLast().op("int4_ops")),
+	index("homework_exemptions_unique_idx").using("btree", table.studentId.asc().nullsLast().op("int4_ops"), table.subjectId.asc().nullsLast().op("int4_ops"), table.exemptDate.asc().nullsLast().op("int4_ops")),
+	foreignKey({
+			columns: [table.classId],
+			foreignColumns: [classes.id],
+			name: "homework_exemptions_class_id_classes_id_fk"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.studentId],
+			foreignColumns: [students.id],
+			name: "homework_exemptions_student_id_students_id_fk"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.subjectId],
+			foreignColumns: [subjects.id],
+			name: "homework_exemptions_subject_id_subjects_id_fk"
+		}).onDelete("cascade"),
+	pgPolicy("homework_exemptions_允许公开删除", { as: "permissive", for: "delete", to: ["public"], using: sql`true` }),
+	pgPolicy("homework_exemptions_允许公开更新", { as: "permissive", for: "update", to: ["public"] }),
+	pgPolicy("homework_exemptions_允许公开写入", { as: "permissive", for: "insert", to: ["public"] }),
+	pgPolicy("homework_exemptions_允许公开读取", { as: "permissive", for: "select", to: ["public"] }),
+]);
+
+export const students = pgTable("students", {
+	id: serial().primaryKey().notNull(),
+	classId: integer("class_id").notNull(),
+	name: varchar({ length: 100 }).notNull(),
+	studentCode: varchar("student_code", { length: 50 }).notNull(),
+	avatarImage: text("avatar_image"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("students_class_id_idx").using("btree", table.classId.asc().nullsLast().op("int4_ops")),
+	index("students_name_idx").using("btree", table.name.asc().nullsLast().op("text_ops")),
+	index("students_student_code_idx").using("btree", table.studentCode.asc().nullsLast().op("text_ops")),
+	foreignKey({
+			columns: [table.classId],
+			foreignColumns: [classes.id],
+			name: "students_class_id_classes_id_fk"
+		}).onDelete("cascade"),
+	pgPolicy("students_允许公开删除", { as: "permissive", for: "delete", to: ["public"], using: sql`true` }),
+	pgPolicy("students_允许公开更新", { as: "permissive", for: "update", to: ["public"] }),
+	pgPolicy("students_允许公开写入", { as: "permissive", for: "insert", to: ["public"] }),
+	pgPolicy("students_允许公开读取", { as: "permissive", for: "select", to: ["public"] }),
+]);
+
+export const subjects = pgTable("subjects", {
+	id: serial().primaryKey().notNull(),
+	classId: integer("class_id").notNull(),
+	name: varchar({ length: 100 }).notNull(),
+	subjectImage: text("subject_image"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("subjects_class_id_idx").using("btree", table.classId.asc().nullsLast().op("int4_ops")),
+	index("subjects_name_idx").using("btree", table.name.asc().nullsLast().op("text_ops")),
+	foreignKey({
+			columns: [table.classId],
+			foreignColumns: [classes.id],
+			name: "subjects_class_id_classes_id_fk"
+		}).onDelete("cascade"),
+	pgPolicy("subjects_允许公开删除", { as: "permissive", for: "delete", to: ["public"], using: sql`true` }),
+	pgPolicy("subjects_允许公开更新", { as: "permissive", for: "update", to: ["public"] }),
+	pgPolicy("subjects_允许公开写入", { as: "permissive", for: "insert", to: ["public"] }),
+	pgPolicy("subjects_允许公开读取", { as: "permissive", for: "select", to: ["public"] }),
+]);
+
+export const systemConfigs = pgTable("system_configs", {
+	id: serial().primaryKey().notNull(),
+	classId: integer("class_id"),
+	scanStartTime: varchar("scan_start_time", { length: 5 }).default('07:00').notNull(),
+	scanEndTime: varchar("scan_end_time", { length: 5 }).default('12:00').notNull(),
+	alertContinuousDays: integer("alert_continuous_days").default(3).notNull(),
+	globalTaskStatus: varchar("global_task_status", { length: 20 }).default('semester').notNull(),
+	todayOverrideDate: varchar("today_override_date", { length: 10 }),
+	todayOverrideStatus: varchar("today_override_status", { length: 20 }).default('auto'),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("system_configs_class_id_idx").using("btree", table.classId.asc().nullsLast().op("int4_ops")),
+	foreignKey({
+			columns: [table.classId],
+			foreignColumns: [classes.id],
+			name: "system_configs_class_id_classes_id_fk"
+		}).onDelete("cascade"),
+	pgPolicy("system_configs_允许公开删除", { as: "permissive", for: "delete", to: ["public"], using: sql`true` }),
+	pgPolicy("system_configs_允许公开更新", { as: "permissive", for: "update", to: ["public"] }),
+	pgPolicy("system_configs_允许公开写入", { as: "permissive", for: "insert", to: ["public"] }),
+	pgPolicy("system_configs_允许公开读取", { as: "permissive", for: "select", to: ["public"] }),
+]);
