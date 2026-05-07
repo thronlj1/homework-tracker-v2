@@ -78,13 +78,6 @@ export function getCurrentTime(): string {
   return `${hours}:${minutes}`;
 }
 
-/** 判断今天（北京时间）是否为周末 */
-function isWeekend(): boolean {
-  const cst = getCSTDate();
-  const day = cst.getDay();
-  return day === 0 || day === 6;
-}
-
 // ==================== 班级操作 ====================
 
 export async function getClasses(): Promise<Class[]> {
@@ -568,28 +561,19 @@ export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus>
     };
   }
 
-  // 优先级 3：法定日历（周末判断）
-  if (isWeekend()) {
-    return {
-      allowed: false,
-      reason: '今日为周末，不收作业',
-      level: 3,
-    };
-  }
-
-  // 优先级 4：每日时段校验
+  // 优先级 3：每日时段校验
   if (currentTime < effectiveConfig.scan_start_time || currentTime > effectiveConfig.scan_end_time) {
     return {
       allowed: false,
       reason: `今日收作业已结束（有效时段 ${effectiveConfig.scan_start_time}-${effectiveConfig.scan_end_time}）`,
-      level: 4,
+      level: 3,
     };
   }
 
   return {
     allowed: true,
     reason: '正常开放',
-    level: 4,
+    level: 3,
   };
 }
 
