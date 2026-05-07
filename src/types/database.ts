@@ -83,7 +83,8 @@ export interface SubmitResult {
 export interface TimeGuardStatus {
   allowed: boolean;
   reason: string;
-  level: 1 | 2 | 3 | 4;
+  /** 时间守卫层级；当前仅时段校验，固定为 1 */
+  level: 1;
 }
 
 // 班级统计数据

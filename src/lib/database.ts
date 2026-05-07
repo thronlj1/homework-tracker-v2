@@ -499,7 +499,7 @@ export async function createSystemConfig(config: {
   return data;
 }
 
-// ==================== 时间守卫（多级优先级校验） ====================
+// ==================== 时间守卫（仅按每日收作业时段，北京时间） ====================
 
 export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus> {
   if (isBrowser) {
@@ -528,52 +528,19 @@ export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus>
 
   const effectiveConfig = config || defaultConfig;
   const currentTime = getCurrentTime();
-  const todayDate = getTodayDate();
 
-  // 优先级 1：全局状态（寒暑假/长假暂停）
-  if (effectiveConfig.global_task_status === 'vacation') {
-    return {
-      allowed: false,
-      reason: '当前为假期，系统已暂停收作业',
-      level: 1,
-    };
-  }
-
-  // 优先级 2：今日人工干预
-  if (
-    effectiveConfig.today_override_date === todayDate &&
-    effectiveConfig.today_override_status === 'force_close'
-  ) {
-    return {
-      allowed: false,
-      reason: '老师已关闭今日收作业',
-      level: 2,
-    };
-  }
-  if (
-    effectiveConfig.today_override_date === todayDate &&
-    effectiveConfig.today_override_status === 'force_open'
-  ) {
-    return {
-      allowed: true,
-      reason: '老师已强制开启今日收作业',
-      level: 2,
-    };
-  }
-
-  // 优先级 3：每日时段校验
   if (currentTime < effectiveConfig.scan_start_time || currentTime > effectiveConfig.scan_end_time) {
     return {
       allowed: false,
-      reason: `今日收作业已结束（有效时段 ${effectiveConfig.scan_start_time}-${effectiveConfig.scan_end_time}）`,
-      level: 3,
+      reason: `不在收作业时段（${effectiveConfig.scan_start_time}-${effectiveConfig.scan_end_time}）`,
+      level: 1,
     };
   }
 
   return {
     allowed: true,
     reason: '正常开放',
-    level: 3,
+    level: 1,
   };
 }
 
