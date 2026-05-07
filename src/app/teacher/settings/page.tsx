@@ -10,7 +10,6 @@ import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Download, Pencil, Trash2 } from 'lucide-react';
 import { Toaster, toast } from 'sonner';
@@ -19,27 +18,19 @@ type EditableConfig = Pick<
   SystemConfig,
   | 'scan_start_time'
   | 'scan_end_time'
-  | 'alert_continuous_days'
   | 'reminder_broadcast_times'
   | 'reminder_schedule_times'
   | 'reminder_poll_interval_minutes'
   | 'student_reminder_voice_enabled'
-  | 'global_task_status'
-  | 'today_override_status'
-  | 'today_override_date'
 >;
 
 const DEFAULT_EDITABLE_CONFIG: EditableConfig = {
   scan_start_time: '07:00',
   scan_end_time: '12:00',
-  alert_continuous_days: 3,
   reminder_broadcast_times: 1,
   reminder_schedule_times: null,
   reminder_poll_interval_minutes: 5,
   student_reminder_voice_enabled: true,
-  global_task_status: 'semester',
-  today_override_status: 'auto',
-  today_override_date: null,
 };
 
 function normalizeReminderScheduleTimes(input: string): { value: string | null; error: string | null } {
@@ -71,7 +62,6 @@ export default function SettingsPage() {
   const [students, setStudents] = useState<Student[]>([]);
   const [config, setConfig] = useState<SystemConfig | null>(null);
   const [configDraft, setConfigDraft] = useState<EditableConfig>(DEFAULT_EDITABLE_CONFIG);
-  const [alertDaysInput, setAlertDaysInput] = useState(String(DEFAULT_EDITABLE_CONFIG.alert_continuous_days));
   const [reminderTimesInput, setReminderTimesInput] = useState(String(DEFAULT_EDITABLE_CONFIG.reminder_broadcast_times));
   const [reminderScheduleInput, setReminderScheduleInput] = useState('');
   const [reminderPollIntervalInput, setReminderPollIntervalInput] = useState(
@@ -123,24 +113,18 @@ export default function SettingsPage() {
           ? {
               scan_start_time: configData.scan_start_time,
               scan_end_time: configData.scan_end_time,
-              alert_continuous_days: configData.alert_continuous_days,
               reminder_broadcast_times: configData.reminder_broadcast_times,
               reminder_schedule_times: configData.reminder_schedule_times,
               reminder_poll_interval_minutes: configData.reminder_poll_interval_minutes,
               student_reminder_voice_enabled: configData.student_reminder_voice_enabled,
-              global_task_status: configData.global_task_status,
-              today_override_status: configData.today_override_status,
-              today_override_date: configData.today_override_date,
             }
           : {}),
       });
-      const nextAlertDays = configData?.alert_continuous_days ?? DEFAULT_EDITABLE_CONFIG.alert_continuous_days;
       const nextReminderTimes =
         configData?.reminder_broadcast_times ?? DEFAULT_EDITABLE_CONFIG.reminder_broadcast_times;
       const nextReminderSchedule = configData?.reminder_schedule_times ?? DEFAULT_EDITABLE_CONFIG.reminder_schedule_times;
       const nextReminderPollInterval =
         configData?.reminder_poll_interval_minutes ?? DEFAULT_EDITABLE_CONFIG.reminder_poll_interval_minutes;
-      setAlertDaysInput(String(nextAlertDays));
       setReminderTimesInput(String(nextReminderTimes));
       setReminderScheduleInput(nextReminderSchedule ?? '');
       setReminderPollIntervalInput(String(nextReminderPollInterval));
@@ -439,13 +423,8 @@ export default function SettingsPage() {
       setConfigSaving(true);
       const normalizedDraft: EditableConfig = {
         ...configDraft,
-        alert_continuous_days: Math.max(1, Math.min(30, configDraft.alert_continuous_days)),
         reminder_broadcast_times: Math.max(1, Math.min(5, configDraft.reminder_broadcast_times)),
         reminder_poll_interval_minutes: Math.max(1, Math.min(60, configDraft.reminder_poll_interval_minutes)),
-        today_override_date:
-          configDraft.today_override_status === 'auto'
-            ? null
-            : new Date().toISOString().split('T')[0],
       };
       const normalizedReminderSchedule = normalizeReminderScheduleTimes(reminderScheduleInput);
       if (normalizedReminderSchedule.error) {
@@ -468,24 +447,18 @@ export default function SettingsPage() {
           ? {
               scan_start_time: newConfig.scan_start_time,
               scan_end_time: newConfig.scan_end_time,
-              alert_continuous_days: newConfig.alert_continuous_days,
               reminder_broadcast_times: newConfig.reminder_broadcast_times,
               reminder_schedule_times: newConfig.reminder_schedule_times,
               reminder_poll_interval_minutes: newConfig.reminder_poll_interval_minutes,
               student_reminder_voice_enabled: newConfig.student_reminder_voice_enabled,
-              global_task_status: newConfig.global_task_status,
-              today_override_status: newConfig.today_override_status,
-              today_override_date: newConfig.today_override_date,
             }
           : {}),
       });
-      const nextAlertDays = newConfig?.alert_continuous_days ?? DEFAULT_EDITABLE_CONFIG.alert_continuous_days;
       const nextReminderTimes =
         newConfig?.reminder_broadcast_times ?? DEFAULT_EDITABLE_CONFIG.reminder_broadcast_times;
       const nextReminderSchedule = newConfig?.reminder_schedule_times ?? DEFAULT_EDITABLE_CONFIG.reminder_schedule_times;
       const nextReminderPollInterval =
         newConfig?.reminder_poll_interval_minutes ?? DEFAULT_EDITABLE_CONFIG.reminder_poll_interval_minutes;
-      setAlertDaysInput(String(nextAlertDays));
       setReminderTimesInput(String(nextReminderTimes));
       setReminderScheduleInput(nextReminderSchedule ?? '');
       setReminderPollIntervalInput(String(nextReminderPollInterval));
@@ -808,50 +781,9 @@ export default function SettingsPage() {
             <Card>
               <CardHeader>
                 <CardTitle>系统配置</CardTitle>
-                <CardDescription>配置收作业时间和预警规则</CardDescription>
+                <CardDescription>配置收作业时间与催交相关选项（每日在时段内开放，含周末）</CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                {/* 全局状态 */}
-                <div className="space-y-2">
-                  <Label>全局任务状态</Label>
-                  <Select 
-                    value={configDraft.global_task_status}
-                    onValueChange={(value) =>
-                      updateConfigDraft({ global_task_status: value as 'semester' | 'vacation' })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="semester">学期中（进行中）</SelectItem>
-                      <SelectItem value="vacation">寒暑假（暂停）</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                
-                {/* 今日覆盖 */}
-                <div className="space-y-2">
-                  <Label>今日状态覆盖</Label>
-                  <Select 
-                    value={configDraft.today_override_status}
-                    onValueChange={(value) =>
-                      updateConfigDraft({
-                        today_override_status: value as 'auto' | 'force_open' | 'force_close',
-                      })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">跟随日历自动</SelectItem>
-                      <SelectItem value="force_open">今日强制开启（如补课）</SelectItem>
-                      <SelectItem value="force_close">今日强制关闭（如运动会）</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                
                 {/* 收作业时间 */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
@@ -870,33 +802,6 @@ export default function SettingsPage() {
                       onChange={(e) => updateConfigDraft({ scan_end_time: e.target.value })}
                     />
                   </div>
-                </div>
-                
-                {/* 预警天数 */}
-                <div className="space-y-2">
-                  <Label>连续未交预警天数</Label>
-                  <Input 
-                    type="text"
-                    inputMode="numeric"
-                    value={alertDaysInput}
-                    onChange={(e) => {
-                      const digits = e.target.value.replace(/\D/g, '');
-                      setAlertDaysInput(digits);
-                      if (!digits) return;
-                      const parsed = parseInt(digits, 10);
-                      if (!Number.isFinite(parsed)) return;
-                      updateConfigDraft({ alert_continuous_days: Math.max(1, Math.min(30, parsed)) });
-                    }}
-                    onBlur={() => {
-                      const parsed = parseInt(alertDaysInput, 10);
-                      const normalized = Number.isFinite(parsed) ? Math.max(1, Math.min(30, parsed)) : 3;
-                      setAlertDaysInput(String(normalized));
-                      updateConfigDraft({ alert_continuous_days: normalized });
-                    }}
-                  />
-                  <p className="text-xs text-gray-500">
-                    连续 N 天未交作业的学生将被标记为预警
-                  </p>
                 </div>
 
                 {/* 催交播报次数 */}
@@ -999,7 +904,6 @@ export default function SettingsPage() {
                     onClick={() => {
                       if (!config) {
                         setConfigDraft(DEFAULT_EDITABLE_CONFIG);
-                        setAlertDaysInput(String(DEFAULT_EDITABLE_CONFIG.alert_continuous_days));
                         setReminderTimesInput(String(DEFAULT_EDITABLE_CONFIG.reminder_broadcast_times));
                         setReminderScheduleInput(DEFAULT_EDITABLE_CONFIG.reminder_schedule_times ?? '');
                         setReminderPollIntervalInput(
@@ -1009,16 +913,11 @@ export default function SettingsPage() {
                         setConfigDraft({
                           scan_start_time: config.scan_start_time,
                           scan_end_time: config.scan_end_time,
-                          alert_continuous_days: config.alert_continuous_days,
                           reminder_broadcast_times: config.reminder_broadcast_times,
                           reminder_schedule_times: config.reminder_schedule_times,
                           reminder_poll_interval_minutes: config.reminder_poll_interval_minutes,
                           student_reminder_voice_enabled: config.student_reminder_voice_enabled,
-                          global_task_status: config.global_task_status,
-                          today_override_status: config.today_override_status,
-                          today_override_date: config.today_override_date,
                         });
-                        setAlertDaysInput(String(config.alert_continuous_days));
                         setReminderTimesInput(String(config.reminder_broadcast_times));
                         setReminderScheduleInput(config.reminder_schedule_times ?? '');
                         setReminderPollIntervalInput(String(config.reminder_poll_interval_minutes));

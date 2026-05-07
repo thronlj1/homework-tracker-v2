@@ -1,4 +1,10 @@
 import { getSupabaseClient } from '@/storage/database/supabase-client';
+import {
+  ensureSystemConfigCache,
+  refreshSystemConfigCache,
+  getResolvedSystemConfig,
+  invalidateSystemConfigCache,
+} from '@/lib/system-config-cache';
 import type {
   Class,
   Student,
@@ -61,12 +67,6 @@ export function getCurrentTime(): string {
   const hours = String(now.getHours()).padStart(2, '0');
   const minutes = String(now.getMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
-}
-
-// 判断是否为周末
-function isWeekend(date: Date): boolean {
-  const day = date.getDay();
-  return day === 0 || day === 6;
 }
 
 // ==================== 班级操作 ====================
@@ -340,23 +340,6 @@ export async function getHomeworkRecords(
   return data || [];
 }
 
-export async function checkDuplicateSubmission(
-  studentId: number,
-  subjectId: number,
-  date: string
-): Promise<boolean> {
-  const client = await getSupabaseClient();
-  const { data, error } = await client
-    .from('homework_records')
-    .select('id')
-    .eq('student_id', studentId)
-    .eq('subject_id', subjectId)
-    .eq('submit_date', date)
-    .maybeSingle();
-  if (error) throw new Error(`检查重复提交失败: ${error.message}`);
-  return data !== null;
-}
-
 export async function submitHomework(
   classId: number,
   studentId: number,
@@ -447,23 +430,8 @@ export async function getSystemConfig(classId?: number): Promise<SystemConfig | 
     const query = classId ? `?classId=${classId}` : '';
     return apiRequest<SystemConfig | null>(`/api/config${query}`);
   }
-  const client = await getSupabaseClient();
-  
-  if (classId) {
-    // 先查班级专属配置
-    const { data, error } = await client.from('system_configs').select('*').eq('class_id', classId).maybeSingle();
-    if (error) throw new Error(`获取系统配置失败: ${error.message}`);
-    if (data) return data;
-    
-    // 再查全局配置
-    const { data: globalData, error: globalError } = await client.from('system_configs').select('*').is('class_id', null).maybeSingle();
-    if (globalError) throw new Error(`获取全局配置失败: ${globalError.message}`);
-    return globalData;
-  }
-  
-  const { data, error } = await client.from('system_configs').select('*').is('class_id', null).maybeSingle();
-  if (error) throw new Error(`获取系统配置失败: ${error.message}`);
-  return data;
+  await ensureSystemConfigCache();
+  return getResolvedSystemConfig(classId);
 }
 
 export async function updateSystemConfig(
@@ -485,6 +453,12 @@ export async function updateSystemConfig(
     .select()
     .single();
   if (error) throw new Error(`更新系统配置失败: ${error.message}`);
+  try {
+    await refreshSystemConfigCache();
+  } catch (e) {
+    console.error('[system-config-cache] refresh failed after update:', e);
+    invalidateSystemConfigCache();
+  }
   return data;
 }
 
@@ -492,12 +466,10 @@ export async function createSystemConfig(config: {
   class_id?: number;
   scan_start_time?: string;
   scan_end_time?: string;
-  alert_continuous_days?: number;
   reminder_broadcast_times?: number;
   reminder_schedule_times?: string | null;
   reminder_poll_interval_minutes?: number;
   student_reminder_voice_enabled?: boolean;
-  global_task_status?: 'semester' | 'vacation';
 }): Promise<SystemConfig> {
   if (isBrowser) {
     return apiRequest<SystemConfig>('/api/config', {
@@ -509,32 +481,16 @@ export async function createSystemConfig(config: {
   const client = await getSupabaseClient();
   const { data, error } = await client.from('system_configs').insert(config).select().single();
   if (error) throw new Error(`创建系统配置失败: ${error.message}`);
+  try {
+    await refreshSystemConfigCache();
+  } catch (e) {
+    console.error('[system-config-cache] refresh failed after create:', e);
+    invalidateSystemConfigCache();
+  }
   return data;
 }
 
-// ==================== 多级时间守卫 ====================
-
-// 调用节假日 API 检查是否为法定节假日
-async function checkHolidayApi(): Promise<boolean> {
-  try {
-    const today = new Date();
-    const year = today.getFullYear();
-    const month = String(today.getMonth() + 1).padStart(2, '0');
-    const day = String(today.getDate()).padStart(2, '0');
-    const dateStr = `${year}${month}${day}`;
-    
-    const response = await fetch(
-      `https://api.apihub.cn/calendar/holiday?date=${dateStr}`
-    );
-    if (!response.ok) return false;
-    
-    const data = await response.json();
-    // 假设返回的 is_holiday 为 true 表示节假日
-    return data?.data?.is_holiday === true;
-  } catch {
-    return false;
-  }
-}
+// ==================== 时间守卫（仅按每日时段） ====================
 
 export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus> {
   if (isBrowser) {
@@ -542,10 +498,8 @@ export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus>
     return apiRequest<TimeGuardStatus>(`/api/time-guard${query}`);
   }
   const config = await getSystemConfig(classId);
-  const today = getTodayDate();
   const currentTime = getCurrentTime();
-  
-  // 默认配置
+
   const defaultConfig: SystemConfig = {
     id: 0,
     class_id: null,
@@ -562,72 +516,21 @@ export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus>
     created_at: '',
     updated_at: null,
   };
-  
+
   const effectiveConfig = config || defaultConfig;
-  
-  // 优先级 1: 全局状态检查
-  if (effectiveConfig.global_task_status === 'vacation') {
-    return {
-      allowed: false,
-      reason: '当前为休假状态，系统已关闭',
-      level: 1,
-    };
-  }
-  
-  // 优先级 2: 今日人工干预
-  if (
-    effectiveConfig.today_override_date === today &&
-    effectiveConfig.today_override_status === 'force_close'
-  ) {
-    return {
-      allowed: false,
-      reason: '今日免交',
-      level: 2,
-    };
-  }
-  
-  if (
-    effectiveConfig.today_override_date === today &&
-    effectiveConfig.today_override_status === 'force_open'
-  ) {
-    return {
-      allowed: true,
-      reason: '正常开放',
-      level: 2,
-    };
-  }
-  
-  // 优先级 3: 法定日历检查
-  const isWeekendDay = isWeekend(new Date());
-  let isHoliday = false;
-  
-  try {
-    isHoliday = await checkHolidayApi();
-  } catch {
-    // API 调用失败，静默处理
-  }
-  
-  if (isWeekendDay || isHoliday) {
-    return {
-      allowed: false,
-      reason: isHoliday ? '今日为法定休息日，无需提交' : '今日为周末，无需提交',
-      level: 3,
-    };
-  }
-  
-  // 优先级 4: 时段检查
+
   if (currentTime < effectiveConfig.scan_start_time || currentTime > effectiveConfig.scan_end_time) {
     return {
       allowed: false,
       reason: '今日收作业已结束',
-      level: 4,
+      level: 1,
     };
   }
-  
+
   return {
     allowed: true,
     reason: '正常开放',
-    level: 4,
+    level: 1,
   };
 }
 
@@ -681,7 +584,7 @@ export async function getStudentStatuses(
 ): Promise<StudentStatus[]> {
   if (isBrowser) {
     const result = await apiRequest<{ studentStatuses: StudentStatus[] | null }>(
-      `/api/stats?classId=${classId}&subjectId=${subjectId}&date=${date}&includeWarnings=0`
+      `/api/stats?classId=${classId}&subjectId=${subjectId}&date=${date}`
     );
     return result.studentStatuses || [];
   }
@@ -753,12 +656,13 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
     };
   }
   
-  // 3. 获取学生和科目信息
+  // 3. 学生、科目并行查询；重复提交依赖唯一索引，由插入失败（23505）识别，不再先 SELECT
+  const today = getTodayDate();
   const [student, subject] = await Promise.all([
     getStudentById(qrData.student_id),
     getSubjectById(qrData.subject_id),
   ]);
-  
+
   if (!student || !subject) {
     return {
       success: false,
@@ -766,26 +670,8 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
       type: 'invalid',
     };
   }
-  
-  // 4. 检查是否已提交
-  const today = getTodayDate();
-  const isDuplicate = await checkDuplicateSubmission(
-    qrData.student_id,
-    qrData.subject_id,
-    today
-  );
-  
-  if (isDuplicate) {
-    return {
-      success: false,
-      message: '请勿重复提交',
-      type: 'duplicate',
-      student,
-      subject,
-    };
-  }
-  
-  // 5. 提交作业
+
+  // 4. 提交作业（与 homework_records 上 student_id+subject_id+submit_date 唯一索引配合）
   try {
     await submitHomework(qrData.class_id, qrData.student_id, qrData.subject_id, today);
     return {
@@ -812,79 +698,4 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
       type: 'error',
     };
   }
-}
-
-// ==================== 预警检查 ====================
-
-export async function checkStudentWarnings(
-  classId: number,
-  subjectId: number,
-  thresholdDays: number = 3
-): Promise<number[]> {
-  if (isBrowser) {
-    const result = await apiRequest<{ warningStudents: number[] }>(
-      `/api/stats?classId=${classId}&subjectId=${subjectId}&date=${getTodayDate()}&includeStatuses=0&includeWarnings=1`
-    );
-    return result.warningStudents || [];
-  }
-  const client = await getSupabaseClient();
-  const students = await getStudentsByClass(classId);
-  const warningStudents: number[] = [];
-  
-  // 获取最近 N 个工作日的日期
-  const workDays: string[] = [];
-  const today = new Date();
-  
-  for (let i = 1; workDays.length < thresholdDays && i <= 30; i++) {
-    const date = new Date(today);
-    date.setDate(date.getDate() - i);
-    
-    if (!isWeekend(date)) {
-      const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-      workDays.push(dateStr);
-    }
-  }
-  
-  if (workDays.length < thresholdDays) {
-    return warningStudents;
-  }
-  
-  // 检查每个学生的连续未交天数
-  for (const student of students) {
-    let consecutiveDays = 0;
-    
-    for (const date of workDays) {
-      // 检查豁免记录
-      const { data: exemption } = await client
-        .from('homework_exemptions')
-        .select('id')
-        .eq('student_id', student.id)
-        .eq('subject_id', subjectId)
-        .eq('exempt_date', date)
-        .maybeSingle();
-      
-      if (exemption) continue;
-      
-      // 检查提交记录
-      const { data: record } = await client
-        .from('homework_records')
-        .select('id')
-        .eq('student_id', student.id)
-        .eq('subject_id', subjectId)
-        .eq('submit_date', date)
-        .maybeSingle();
-      
-      if (record) {
-        consecutiveDays = 0;
-      } else {
-        consecutiveDays++;
-        if (consecutiveDays >= thresholdDays) {
-          warningStudents.push(student.id);
-          break;
-        }
-      }
-    }
-  }
-  
-  return warningStudents;
 }

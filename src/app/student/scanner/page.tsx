@@ -243,11 +243,12 @@ function ScannerContent() {
       setTimeout(() => {
         setLastResult(null);
       }, 2000);
-      
-      // 重新检查时间守卫状态
-      const guardStatus = await checkTimeGuard(classId);
-      setTimeGuard(guardStatus);
-      
+
+      // 提交成功时段一般不会瞬时变化，跳过守卫请求；失败时再同步服务端状态
+      if (result.type !== 'success') {
+        const guardStatus = await checkTimeGuard(classId);
+        setTimeGuard(guardStatus);
+      }
       } catch {
       setLastResult({
         success: false,
@@ -436,11 +437,11 @@ function ScannerContent() {
       
       try {
         setLoading(true);
-        const [classData, guardStatus] = await Promise.all([
+        const [classData, guardStatus, configData] = await Promise.all([
           getClassById(classId),
           checkTimeGuard(classId),
+          getSystemConfig(classId),
         ]);
-        const configData = await getSystemConfig(classId);
         
         if (!classData) {
           router.push('/student');

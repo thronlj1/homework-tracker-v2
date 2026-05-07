@@ -184,7 +184,6 @@ export async function runHomeworkDeadlineJobWithOptions(
         continue;
       }
       const config = await getSystemConfig(classItem.id);
-      if (config?.global_task_status === 'vacation') continue;
       const scanEndTime = config?.scan_end_time ?? '12:00';
       const shouldRunDeadlineReminder = Boolean(webhook) && (options.force || shouldRunForClass(scanEndTime));
       if (!shouldRunDeadlineReminder && !shouldRunScheduledBroadcast) continue;

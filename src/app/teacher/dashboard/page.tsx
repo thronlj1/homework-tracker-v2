@@ -2,12 +2,11 @@
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getClassById, getClassStats, getStudentStatuses, checkStudentWarnings, createExemption, deleteHomeworkRecord, getTodayDate } from '@/lib/database';
+import { getClassById, getClassStats, getStudentStatuses, createExemption, deleteHomeworkRecord, getTodayDate } from '@/lib/database';
 import type { Class, ClassStats, StudentStatus } from '@/types/database';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
@@ -26,7 +25,6 @@ function DashboardContent() {
   const [loading, setLoading] = useState(true);
   const [selectedSubject, setSelectedSubject] = useState<number | null>(initialSubjectId || null);
   const [studentStatuses, setStudentStatuses] = useState<StudentStatus[]>([]);
-  const [warningStudents, setWarningStudents] = useState<number[]>([]);
   const [statusesLoading, setStatusesLoading] = useState(false);
   const [activeTab, setActiveTab] = useState(
     initialTab === 'submitted' || initialTab === 'not_submitted' || initialTab === 'overview'
@@ -48,15 +46,27 @@ function DashboardContent() {
     try {
       const statsData = await getClassStats(classId, today);
       setStats(statsData);
-      
-      // 默认选中第一个科目
-      if (statsData.subjects.length > 0 && !selectedSubject) {
-        setSelectedSubject(statsData.subjects[0].subject_id);
-      }
+      setSelectedSubject((prev) => {
+        if (statsData.subjects.length === 0) return prev;
+        const ids = new Set(statsData.subjects.map((s) => s.subject_id));
+        if (prev != null && ids.has(prev)) return prev;
+        return statsData.subjects[0].subject_id;
+      });
     } catch (error) {
       console.error('Load stats error:', error);
     }
-  }, [classId, today, selectedSubject]);
+  }, [classId, today]);
+
+  const loadReminderVoiceToggle = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/reminder/voice?classId=${classId}`, { cache: 'no-store' });
+      const payload = await response.json();
+      if (!response.ok || !payload?.success) return;
+      setTeacherReminderVoiceEnabled(Boolean(payload?.data?.enabled));
+    } catch {
+      // Ignore toggle loading errors.
+    }
+  }, [classId]);
 
   const loadStudentStatuses = useCallback(async (subjectId: number) => {
     if (!classId || !subjectId) return;
@@ -66,22 +76,9 @@ function DashboardContent() {
     setStatusesLoading(true);
 
     try {
-      // 先加载名单（快路径），避免预警计算慢导致“列表空白像 bug”
       const statuses = await getStudentStatuses(classId, subjectId, today);
       if (requestId !== latestStatusRequestRef.current) return;
       setStudentStatuses(statuses);
-      setStatusesLoading(false);
-
-      // 再异步加载预警（慢路径）
-      checkStudentWarnings(classId, subjectId, 3)
-        .then((warnings) => {
-          if (requestId !== latestStatusRequestRef.current) return;
-          setWarningStudents(warnings);
-        })
-        .catch((error) => {
-          if (requestId !== latestStatusRequestRef.current) return;
-          console.error('Load warning students error:', error);
-        });
     } catch (error) {
       if (requestId !== latestStatusRequestRef.current) return;
       console.error('Load student statuses error:', error);
@@ -101,8 +98,10 @@ function DashboardContent() {
       
       try {
         setLoading(true);
-        const [classData] = await Promise.all([
+        const [classData, statsData] = await Promise.all([
           getClassById(classId),
+          getClassStats(classId, today),
+          loadReminderVoiceToggle(),
         ]);
         
         if (!classData) {
@@ -111,7 +110,13 @@ function DashboardContent() {
         }
         
         setClassInfo(classData);
-        await loadStats();
+        setStats(statsData);
+        setSelectedSubject((prev) => {
+          if (statsData.subjects.length === 0) return prev;
+          const ids = new Set(statsData.subjects.map((s) => s.subject_id));
+          if (prev != null && ids.has(prev)) return prev;
+          return statsData.subjects[0].subject_id;
+        });
       } catch (error) {
         console.error('Load data error:', error);
       } finally {
@@ -120,36 +125,17 @@ function DashboardContent() {
     }
     
     loadData();
-  }, [classId, router, loadStats]);
+  }, [classId, router, today, loadReminderVoiceToggle]);
 
-  // 加载学生状态
+  // 加载学生状态：须等 stats 已到（与首屏 loadData 同源），避免 stats 仍为 null 时抢跑一遍、stats 就绪后再跑一遍导致重复请求
   useEffect(() => {
-    if (!selectedSubject) return;
+    if (!selectedSubject || !stats) return;
     loadStudentStatuses(selectedSubject);
   }, [selectedSubject, stats, loadStudentStatuses]);
 
-  const loadReminderVoiceToggle = useCallback(async () => {
-    try {
-      const response = await fetch(`/api/reminder/voice?classId=${classId}`, { cache: 'no-store' });
-      const payload = await response.json();
-      if (!response.ok || !payload?.success) return;
-      setTeacherReminderVoiceEnabled(Boolean(payload?.data?.enabled));
-    } catch {
-      // Ignore toggle loading errors.
-    }
-  }, [classId]);
-
-  useEffect(() => {
-    if (!classId) return;
-    void loadReminderVoiceToggle();
-  }, [classId, loadReminderVoiceToggle]);
-
-  // 刷新数据
+  // 刷新数据（科目名单由上面 effect 在 stats 更新后自动拉取，此处不必再调 loadStudentStatuses）
   async function handleRefresh() {
     await loadStats();
-    if (selectedSubject) {
-      await loadStudentStatuses(selectedSubject);
-    }
     await loadReminderVoiceToggle();
   }
 
@@ -230,10 +216,9 @@ function DashboardContent() {
       if (!subject) return;
 
       const statuses = await getStudentStatuses(classId, selectedSubject, today);
-      const warningSet = new Set(await checkStudentWarnings(classId, selectedSubject, 3));
 
       const rows: string[] = [
-        ['班级', '日期', '科目', '学生姓名', '学号', '状态', '是否预警', '提交时间'].join(','),
+        ['班级', '日期', '科目', '学生姓名', '学号', '状态', '提交时间'].join(','),
       ];
 
       for (const item of statuses) {
@@ -252,7 +237,6 @@ function DashboardContent() {
             escapeCsvCell(item.student_name),
             escapeCsvCell(item.student_code),
             statusLabel,
-            warningSet.has(item.student_id) ? '是' : '否',
             item.submit_time ? escapeCsvCell(item.submit_time) : '',
           ].join(',')
         );
@@ -435,16 +419,6 @@ function DashboardContent() {
                   </div>
                 </div>
                 
-                {/* 预警提示 */}
-                {warningStudents.length > 0 && (
-                  <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-                    <p className="text-red-700 font-semibold mb-2">⚠️ 预警提醒</p>
-                    <p className="text-red-600 text-sm">
-                      有 {warningStudents.length} 名同学连续 3 天以上未交作业，请关注！
-                    </p>
-                  </div>
-                )}
-                
               </CardContent>
             </Card>
           </TabsContent>
@@ -514,21 +488,12 @@ function DashboardContent() {
                     .map((student) => (
                       <div 
                         key={student.student_id}
-                        className={`flex items-center justify-between p-3 rounded-lg ${
-                          warningStudents.includes(student.student_id) 
-                            ? 'bg-red-100 border border-red-300' 
-                            : 'bg-red-50'
-                        }`}
+                        className="flex items-center justify-between p-3 rounded-lg bg-red-50"
                       >
                         <div className="flex items-center gap-3">
                           <span className="text-xl">❌</span>
                           <div>
-                            <div className="flex items-center gap-2">
-                              <p className="font-medium">{student.student_name}</p>
-                              {warningStudents.includes(student.student_id) && (
-                                <Badge variant="destructive">预警</Badge>
-                              )}
-                            </div>
+                            <p className="font-medium">{student.student_name}</p>
                             <p className="text-xs text-gray-500">学号: {student.student_code}</p>
                           </div>
                         </div>

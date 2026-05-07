@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getClassStats, getStudentStatuses, checkStudentWarnings } from '@/lib/database';
+import { getClassStats, getStudentStatuses } from '@/lib/database';
 
 export async function GET(request: NextRequest) {
   try {
@@ -8,7 +8,6 @@ export async function GET(request: NextRequest) {
     const subjectId = searchParams.get('subjectId');
     const date = searchParams.get('date') || new Date().toISOString().split('T')[0];
     const includeStatuses = searchParams.get('includeStatuses') !== '0';
-    const includeWarnings = searchParams.get('includeWarnings') !== '0';
     
     if (!classId) {
       return NextResponse.json({ 
@@ -19,9 +18,7 @@ export async function GET(request: NextRequest) {
     
     const stats = await getClassStats(parseInt(classId, 10), date);
     
-    // 如果指定了科目，同时返回学生状态
     let studentStatuses = null;
-    let warningStudents: number[] = [];
     
     if (subjectId && includeStatuses) {
       studentStatuses = await getStudentStatuses(
@@ -30,20 +27,12 @@ export async function GET(request: NextRequest) {
         date
       );
     }
-    if (subjectId && includeWarnings) {
-      warningStudents = await checkStudentWarnings(
-        parseInt(classId, 10),
-        parseInt(subjectId, 10),
-        3
-      );
-    }
     
     return NextResponse.json({ 
       success: true, 
       data: {
         stats,
         studentStatuses,
-        warningStudents,
       }
     });
   } catch (error) {
