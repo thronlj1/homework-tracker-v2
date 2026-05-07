@@ -52,21 +52,37 @@ export function parseQRCode(code: string): QRCodeData | null {
   };
 }
 
-// 获取今日日期 (YYYY-MM-DD)
-export function getTodayDate(): string {
+// ==================== 时区工具 ====================
+
+/** 获取中国标准时间 (CST, UTC+8) 的 Date 对象 */
+function getCSTDate(): Date {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+  const cstStr = now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' });
+  return new Date(cstStr);
+}
+
+// 获取今日日期 (YYYY-MM-DD)，基于北京时间
+export function getTodayDate(): string {
+  const cst = getCSTDate();
+  const year = cst.getFullYear();
+  const month = String(cst.getMonth() + 1).padStart(2, '0');
+  const day = String(cst.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
-// 获取当前时间 (HH:mm)
+// 获取当前时间 (HH:mm)，基于北京时间
 export function getCurrentTime(): string {
-  const now = new Date();
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
+  const cst = getCSTDate();
+  const hours = String(cst.getHours()).padStart(2, '0');
+  const minutes = String(cst.getMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
+}
+
+/** 判断今天（北京时间）是否为周末 */
+function isWeekend(): boolean {
+  const cst = getCSTDate();
+  const day = cst.getDay();
+  return day === 0 || day === 6;
 }
 
 // ==================== 班级操作 ====================
@@ -490,15 +506,15 @@ export async function createSystemConfig(config: {
   return data;
 }
 
-// ==================== 时间守卫（仅按每日时段） ====================
+// ==================== 时间守卫（多级优先级校验） ====================
 
 export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus> {
   if (isBrowser) {
     const query = classId ? `?classId=${classId}` : '';
     return apiRequest<TimeGuardStatus>(`/api/time-guard${query}`);
   }
+
   const config = await getSystemConfig(classId);
-  const currentTime = getCurrentTime();
 
   const defaultConfig: SystemConfig = {
     id: 0,
@@ -518,19 +534,62 @@ export async function checkTimeGuard(classId?: number): Promise<TimeGuardStatus>
   };
 
   const effectiveConfig = config || defaultConfig;
+  const currentTime = getCurrentTime();
+  const todayDate = getTodayDate();
 
+  // 优先级 1：全局状态（寒暑假/长假暂停）
+  if (effectiveConfig.global_task_status === 'vacation') {
+    return {
+      allowed: false,
+      reason: '当前为假期，系统已暂停收作业',
+      level: 1,
+    };
+  }
+
+  // 优先级 2：今日人工干预
+  if (
+    effectiveConfig.today_override_date === todayDate &&
+    effectiveConfig.today_override_status === 'force_close'
+  ) {
+    return {
+      allowed: false,
+      reason: '老师已关闭今日收作业',
+      level: 2,
+    };
+  }
+  if (
+    effectiveConfig.today_override_date === todayDate &&
+    effectiveConfig.today_override_status === 'force_open'
+  ) {
+    return {
+      allowed: true,
+      reason: '老师已强制开启今日收作业',
+      level: 2,
+    };
+  }
+
+  // 优先级 3：法定日历（周末判断）
+  if (isWeekend()) {
+    return {
+      allowed: false,
+      reason: '今日为周末，不收作业',
+      level: 3,
+    };
+  }
+
+  // 优先级 4：每日时段校验
   if (currentTime < effectiveConfig.scan_start_time || currentTime > effectiveConfig.scan_end_time) {
     return {
       allowed: false,
-      reason: '今日收作业已结束',
-      level: 1,
+      reason: `今日收作业已结束（有效时段 ${effectiveConfig.scan_start_time}-${effectiveConfig.scan_end_time}）`,
+      level: 4,
     };
   }
 
   return {
     allowed: true,
     reason: '正常开放',
-    level: 1,
+    level: 4,
   };
 }
 
