@@ -1,4 +1,4 @@
-import { pgTable, index, foreignKey, pgPolicy, serial, integer, varchar, timestamp, unique, text } from "drizzle-orm/pg-core"
+import { pgTable, index, foreignKey, pgPolicy, serial, integer, varchar, timestamp, unique, text, uniqueIndex } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 
@@ -16,7 +16,11 @@ export const homeworkRecords = pgTable("homework_records", {
 	index("homework_records_student_id_idx").using("btree", table.studentId.asc().nullsLast().op("int4_ops")),
 	index("homework_records_subject_id_idx").using("btree", table.subjectId.asc().nullsLast().op("int4_ops")),
 	index("homework_records_submit_date_idx").using("btree", table.submitDate.asc().nullsLast().op("text_ops")),
-	index("homework_records_unique_idx").using("btree", table.studentId.asc().nullsLast().op("int4_ops"), table.subjectId.asc().nullsLast().op("int4_ops"), table.submitDate.asc().nullsLast().op("int4_ops")),
+	unique("homework_records_student_subject_submit_date_unique").on(
+		table.studentId,
+		table.subjectId,
+		table.submitDate,
+	),
 	foreignKey({
 			columns: [table.classId],
 			foreignColumns: [classes.id],
@@ -39,7 +43,7 @@ export const homeworkRecords = pgTable("homework_records", {
 ]);
 
 export const healthCheck = pgTable("health_check", {
-	id: serial().notNull(),
+	id: serial().primaryKey().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 });
 
@@ -50,7 +54,6 @@ export const classes = pgTable("classes", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
-	index("classes_name_idx").using("btree", table.name.asc().nullsLast().op("text_ops")),
 	unique("classes_name_unique").on(table.name),
 	pgPolicy("classes_允许公开删除", { as: "permissive", for: "delete", to: ["public"], using: sql`true` }),
 	pgPolicy("classes_允许公开更新", { as: "permissive", for: "update", to: ["public"] }),
@@ -72,7 +75,11 @@ export const homeworkExemptions = pgTable("homework_exemptions", {
 	index("homework_exemptions_date_idx").using("btree", table.exemptDate.asc().nullsLast().op("text_ops")),
 	index("homework_exemptions_student_id_idx").using("btree", table.studentId.asc().nullsLast().op("int4_ops")),
 	index("homework_exemptions_subject_id_idx").using("btree", table.subjectId.asc().nullsLast().op("int4_ops")),
-	index("homework_exemptions_unique_idx").using("btree", table.studentId.asc().nullsLast().op("int4_ops"), table.subjectId.asc().nullsLast().op("int4_ops"), table.exemptDate.asc().nullsLast().op("int4_ops")),
+	unique("homework_exemptions_student_subject_exempt_date_unique").on(
+		table.studentId,
+		table.subjectId,
+		table.exemptDate,
+	),
 	foreignKey({
 			columns: [table.classId],
 			foreignColumns: [classes.id],
@@ -105,7 +112,7 @@ export const students = pgTable("students", {
 }, (table) => [
 	index("students_class_id_idx").using("btree", table.classId.asc().nullsLast().op("int4_ops")),
 	index("students_name_idx").using("btree", table.name.asc().nullsLast().op("text_ops")),
-	index("students_student_code_idx").using("btree", table.studentCode.asc().nullsLast().op("text_ops")),
+	unique("students_class_id_student_code_unique").on(table.classId, table.studentCode),
 	foreignKey({
 			columns: [table.classId],
 			foreignColumns: [classes.id],
@@ -126,7 +133,7 @@ export const subjects = pgTable("subjects", {
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	index("subjects_class_id_idx").using("btree", table.classId.asc().nullsLast().op("int4_ops")),
-	index("subjects_name_idx").using("btree", table.name.asc().nullsLast().op("text_ops")),
+	unique("subjects_class_id_name_unique").on(table.classId, table.name),
 	foreignKey({
 			columns: [table.classId],
 			foreignColumns: [classes.id],
@@ -150,7 +157,10 @@ export const systemConfigs = pgTable("system_configs", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
-	index("system_configs_class_id_idx").using("btree", table.classId.asc().nullsLast().op("int4_ops")),
+	uniqueIndex("system_configs_class_id_unique")
+		.on(table.classId)
+		.where(sql`${table.classId} is not null`),
+	uniqueIndex("system_configs_global_unique").on(sql`(1)`).where(sql`${table.classId} is null`),
 	foreignKey({
 			columns: [table.classId],
 			foreignColumns: [classes.id],
