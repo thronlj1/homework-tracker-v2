@@ -379,6 +379,7 @@ export async function submitHomework(
     .single();
   if (error) {
     const pg = getPostgresErrorCode(error);
+    const ext = error as { details?: string; hint?: string };
     console.warn('[homework-submit]', 'insert rejected', {
       classId,
       studentId,
@@ -386,6 +387,8 @@ export async function submitHomework(
       submit_date: date,
       postgresCode: pg,
       message: error.message,
+      details: ext.details,
+      hint: ext.hint,
     });
     const wrapped = new Error(`提交作业失败: ${error.message}`) as Error & { postgresCode?: string };
     if (pg) wrapped.postgresCode = pg;
