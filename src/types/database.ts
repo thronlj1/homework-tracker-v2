@@ -78,6 +78,10 @@ export interface SubmitResult {
   type: 'success' | 'duplicate' | 'invalid' | 'error';
   student?: Student;
   subject?: Subject;
+  /** 本次尝试写入的 submit_date（仅 duplicate / 部分 error 时便于与库内数据对照） */
+  attemptedSubmitDate?: string;
+  /** 原始 Postgres 错误码，如 23505=唯一约束（勿依赖 message 子串，避免误判） */
+  postgresCode?: string;
 }
 
 export interface TimeGuardStatus {

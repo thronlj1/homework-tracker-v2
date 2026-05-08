@@ -352,6 +352,14 @@ export async function getHomeworkRecords(
   return data || [];
 }
 
+function getPostgresErrorCode(err: unknown): string | undefined {
+  if (err && typeof err === 'object' && 'code' in err) {
+    const c = (err as { code?: string }).code;
+    return typeof c === 'string' ? c : undefined;
+  }
+  return undefined;
+}
+
 export async function submitHomework(
   classId: number,
   studentId: number,
@@ -369,7 +377,12 @@ export async function submitHomework(
     })
     .select()
     .single();
-  if (error) throw new Error(`提交作业失败: ${error.message}`);
+  if (error) {
+    const wrapped = new Error(`提交作业失败: ${error.message}`) as Error & { postgresCode?: string };
+    const pg = getPostgresErrorCode(error);
+    if (pg) wrapped.postgresCode = pg;
+    throw wrapped;
+  }
   return data;
 }
 
@@ -696,19 +709,30 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
-    if (/23505|duplicate key|unique/i.test(message)) {
+    const pgCode =
+      error && typeof error === 'object' && 'postgresCode' in error
+        ? (error as { postgresCode?: string }).postgresCode
+        : getPostgresErrorCode(error);
+    // 仅 23505 视为「当天重复」；message 里含 unique/duplicate 的其它错误易误判
+    if (pgCode === '23505' || (pgCode == null && /23505|duplicate key value violates unique constraint/i.test(message))) {
       return {
         success: false,
         message: '请勿重复提交',
         type: 'duplicate',
         student,
         subject,
+        attemptedSubmitDate: today,
+        postgresCode: pgCode,
       };
     }
     return {
       success: false,
-      message: '提交失败，请重试',
+      message: process.env.NODE_ENV === 'development' ? message : '提交失败，请重试',
       type: 'error',
+      student,
+      subject,
+      attemptedSubmitDate: today,
+      postgresCode: pgCode,
     };
   }
 }
