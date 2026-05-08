@@ -390,8 +390,12 @@ export async function submitHomework(
       details: ext.details,
       hint: ext.hint,
     });
-    const wrapped = new Error(`提交作业失败: ${error.message}`) as Error & { postgresCode?: string };
+    const wrapped = new Error(`提交作业失败: ${error.message}`) as Error & {
+      postgresCode?: string;
+      postgresDetail?: string;
+    };
     if (pg) wrapped.postgresCode = pg;
+    if (ext.details) wrapped.postgresDetail = ext.details;
     throw wrapped;
   }
   console.info('[homework-submit]', 'insert ok', {
@@ -677,6 +681,12 @@ export async function getStudentStatuses(
   });
 }
 
+/** 23505 且为主键 id 冲突：多为 identity 序列与 max(id) 不同步，并非「同一天重复交」 */
+function isHomeworkRecordsPkeyIdCollision(message: string, detail?: string): boolean {
+  const t = `${message}\n${detail ?? ''}`;
+  return /homework_records_pkey/i.test(t) || /Key \(id\)=\(/i.test(t);
+}
+
 // ==================== 提交作业（带校验） ====================
 
 export async function submitHomeworkWithValidation(qrCode: string): Promise<SubmitResult> {
@@ -748,13 +758,38 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
+    const pgDetail =
+      error && typeof error === 'object' && 'postgresDetail' in error
+        ? (error as { postgresDetail?: string }).postgresDetail
+        : '';
     const pgCode =
       error && typeof error === 'object' && 'postgresCode' in error
         ? (error as { postgresCode?: string }).postgresCode
         : getPostgresErrorCode(error);
-    // 仅 23505 视为「当天重复」；message 里含 unique/duplicate 的其它错误易误判
-    if (pgCode === '23505' || (pgCode == null && /23505|duplicate key value violates unique constraint/i.test(message))) {
-      console.warn('[homework-submit]', 'duplicate (23505)', {
+
+    const inferred23505 =
+      pgCode === '23505' ||
+      (pgCode == null && /duplicate key value violates unique constraint/i.test(message));
+
+    if (inferred23505) {
+      if (isHomeworkRecordsPkeyIdCollision(message, pgDetail)) {
+        console.error(
+          '[homework-submit]',
+          'id sequence out of sync (not a same-day duplicate). Fix in SQL:',
+          "SELECT setval(pg_get_serial_sequence('public.homework_records','id'), COALESCE((SELECT MAX(id) FROM public.homework_records),1), true);"
+        );
+        return {
+          success: false,
+          message: '提交失败，请稍后再试',
+          type: 'error',
+          student,
+          subject,
+          attemptedSubmitDate: today,
+          postgresCode: pgCode,
+        };
+      }
+      // 表上除主键外仅 (student_id, subject_id, submit_date) 唯一
+      console.warn('[homework-submit]', 'duplicate same calendar day (23505)', {
         classId: qrData.class_id,
         studentId: qrData.student_id,
         subjectId: qrData.subject_id,
