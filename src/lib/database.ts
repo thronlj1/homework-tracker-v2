@@ -54,33 +54,30 @@ export function parseQRCode(code: string): QRCodeData | null {
 
 // ==================== 时区工具 ====================
 
-/** 业务日、收作业时段均按中国标准时间（上海） */
-const SHANGHAI_TZ = 'Asia/Shanghai';
+/**
+ * 业务日、收作业时段：中国内地统一使用 UTC+8（无夏令时）。
+ * 使用固定偏移而非 Intl/IANA，避免部分托管环境缺少时区数据或 DateTimeFormat 行为异常。
+ */
+const CHINA_OFFSET_MS = 8 * 60 * 60 * 1000;
 
-// 获取今日日期 (YYYY-MM-DD)，基于 Asia/Shanghai（勿用 toLocaleString + new Date 解析，会按运行环境本地时区误解）
-export function getTodayDate(): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: SHANGHAI_TZ,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(new Date());
-  const year = parts.find((p) => p.type === 'year')?.value;
-  const month = parts.find((p) => p.type === 'month')?.value;
-  const day = parts.find((p) => p.type === 'day')?.value;
-  return `${year}-${month}-${day}`;
+function shiftedChinaClock(d = new Date()): Date {
+  return new Date(d.getTime() + CHINA_OFFSET_MS);
 }
 
-// 获取当前时间 (HH:mm)，基于 Asia/Shanghai
+// 获取今日日期 (YYYY-MM-DD)，中国内地日历日
+export function getTodayDate(): string {
+  const s = shiftedChinaClock();
+  const y = s.getUTCFullYear();
+  const m = String(s.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(s.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// 获取当前时间 (HH:mm)，中国内地时钟
 export function getCurrentTime(): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: SHANGHAI_TZ,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).formatToParts(new Date());
-  const hours = (parts.find((p) => p.type === 'hour')?.value ?? '0').padStart(2, '0');
-  const minutes = (parts.find((p) => p.type === 'minute')?.value ?? '0').padStart(2, '0');
+  const s = shiftedChinaClock();
+  const hours = String(s.getUTCHours()).padStart(2, '0');
+  const minutes = String(s.getUTCMinutes()).padStart(2, '0');
   return `${hours}:${minutes}`;
 }
 

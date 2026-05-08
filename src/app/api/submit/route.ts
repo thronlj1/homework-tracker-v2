@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { submitHomeworkWithValidation, getTodayDate, getCurrentTime } from '@/lib/database';
+import { submitHomeworkWithValidation } from '@/lib/database';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,19 +15,6 @@ export async function POST(request: NextRequest) {
     }
     
     const result = await submitHomeworkWithValidation(qrCode);
-
-    // 临时调试：在重复提交时返回日期时间信息
-    if (result.type === 'duplicate') {
-      return NextResponse.json({
-        ...result,
-        debug: {
-          todayDate: getTodayDate(),
-          currentTime: getCurrentTime(),
-          rawUTC: new Date().toISOString(),
-        }
-      });
-    }
-    
     return NextResponse.json(result);
   } catch (error) {
     console.error('Submit homework error:', error);
