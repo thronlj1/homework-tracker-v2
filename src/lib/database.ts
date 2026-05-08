@@ -378,11 +378,26 @@ export async function submitHomework(
     .select()
     .single();
   if (error) {
-    const wrapped = new Error(`提交作业失败: ${error.message}`) as Error & { postgresCode?: string };
     const pg = getPostgresErrorCode(error);
+    console.warn('[homework-submit]', 'insert rejected', {
+      classId,
+      studentId,
+      subjectId,
+      submit_date: date,
+      postgresCode: pg,
+      message: error.message,
+    });
+    const wrapped = new Error(`提交作业失败: ${error.message}`) as Error & { postgresCode?: string };
     if (pg) wrapped.postgresCode = pg;
     throw wrapped;
   }
+  console.info('[homework-submit]', 'insert ok', {
+    recordId: data?.id,
+    classId,
+    studentId,
+    subjectId,
+    submit_date: date,
+  });
   return data;
 }
 
@@ -665,6 +680,7 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
   // 1. 解析二维码
   const qrData = parseQRCode(qrCode);
   if (!qrData) {
+    console.warn('[homework-submit]', 'invalid qr', { length: qrCode?.length ?? 0 });
     return {
       success: false,
       message: '无效二维码',
@@ -675,6 +691,10 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
   // 2. 检查时间守卫
   const timeGuard = await checkTimeGuard(qrData.class_id);
   if (!timeGuard.allowed) {
+    console.warn('[homework-submit]', 'time_guard blocked', {
+      classId: qrData.class_id,
+      reason: timeGuard.reason,
+    });
     return {
       success: false,
       message: timeGuard.reason,
@@ -690,12 +710,28 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
   ]);
 
   if (!student || !subject) {
+    console.warn('[homework-submit]', 'missing student or subject', {
+      classId: qrData.class_id,
+      studentId: qrData.student_id,
+      subjectId: qrData.subject_id,
+      studentFound: !!student,
+      subjectFound: !!subject,
+    });
     return {
       success: false,
       message: '学生或科目不存在',
       type: 'invalid',
     };
   }
+
+  console.info('[homework-submit]', 'attempt', {
+    classId: qrData.class_id,
+    studentId: qrData.student_id,
+    subjectId: qrData.subject_id,
+    attemptedSubmitDate: today,
+    chinaTime: getCurrentTime(),
+    utc: new Date().toISOString(),
+  });
 
   // 4. 提交作业（与 homework_records 上 student_id+subject_id+submit_date 唯一索引配合）
   try {
@@ -715,6 +751,13 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
         : getPostgresErrorCode(error);
     // 仅 23505 视为「当天重复」；message 里含 unique/duplicate 的其它错误易误判
     if (pgCode === '23505' || (pgCode == null && /23505|duplicate key value violates unique constraint/i.test(message))) {
+      console.warn('[homework-submit]', 'duplicate (23505)', {
+        classId: qrData.class_id,
+        studentId: qrData.student_id,
+        subjectId: qrData.subject_id,
+        attemptedSubmitDate: today,
+        postgresCode: pgCode ?? 'inferred',
+      });
       return {
         success: false,
         message: '请勿重复提交',
@@ -725,6 +768,14 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
         postgresCode: pgCode,
       };
     }
+    console.error('[homework-submit]', 'insert failed (non-duplicate)', {
+      classId: qrData.class_id,
+      studentId: qrData.student_id,
+      subjectId: qrData.subject_id,
+      attemptedSubmitDate: today,
+      postgresCode: pgCode,
+      message: message.slice(0, 500),
+    });
     return {
       success: false,
       message: process.env.NODE_ENV === 'development' ? message : '提交失败，请重试',

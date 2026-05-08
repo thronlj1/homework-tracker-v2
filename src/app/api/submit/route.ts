@@ -15,6 +15,11 @@ export async function POST(request: NextRequest) {
     }
     
     const result = await submitHomeworkWithValidation(qrCode);
+    console.info('[api/submit]', 'response', {
+      type: result.type,
+      attemptedSubmitDate: result.attemptedSubmitDate,
+      postgresCode: result.postgresCode,
+    });
     return NextResponse.json(result);
   } catch (error) {
     console.error('Submit homework error:', error);
