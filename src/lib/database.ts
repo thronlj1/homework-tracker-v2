@@ -54,27 +54,33 @@ export function parseQRCode(code: string): QRCodeData | null {
 
 // ==================== 时区工具 ====================
 
-/** 获取中国标准时间 (CST, UTC+8) 的 Date 对象 */
-function getCSTDate(): Date {
-  const now = new Date();
-  const cstStr = now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' });
-  return new Date(cstStr);
-}
+/** 业务日、收作业时段均按中国标准时间（上海） */
+const SHANGHAI_TZ = 'Asia/Shanghai';
 
-// 获取今日日期 (YYYY-MM-DD)，基于北京时间
+// 获取今日日期 (YYYY-MM-DD)，基于 Asia/Shanghai（勿用 toLocaleString + new Date 解析，会按运行环境本地时区误解）
 export function getTodayDate(): string {
-  const cst = getCSTDate();
-  const year = cst.getFullYear();
-  const month = String(cst.getMonth() + 1).padStart(2, '0');
-  const day = String(cst.getDate()).padStart(2, '0');
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: SHANGHAI_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date());
+  const year = parts.find((p) => p.type === 'year')?.value;
+  const month = parts.find((p) => p.type === 'month')?.value;
+  const day = parts.find((p) => p.type === 'day')?.value;
   return `${year}-${month}-${day}`;
 }
 
-// 获取当前时间 (HH:mm)，基于北京时间
+// 获取当前时间 (HH:mm)，基于 Asia/Shanghai
 export function getCurrentTime(): string {
-  const cst = getCSTDate();
-  const hours = String(cst.getHours()).padStart(2, '0');
-  const minutes = String(cst.getMinutes()).padStart(2, '0');
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: SHANGHAI_TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(new Date());
+  const hours = (parts.find((p) => p.type === 'hour')?.value ?? '0').padStart(2, '0');
+  const minutes = (parts.find((p) => p.type === 'minute')?.value ?? '0').padStart(2, '0');
   return `${hours}:${minutes}`;
 }
 
