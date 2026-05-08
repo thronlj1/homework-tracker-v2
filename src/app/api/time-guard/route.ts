@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { checkTimeGuard } from '@/lib/database';
+import { checkTimeGuard, getTodayDate, getCurrentTime } from '@/lib/database';
 
 export async function GET(request: NextRequest) {
   try {
@@ -10,7 +10,13 @@ export async function GET(request: NextRequest) {
     
     return NextResponse.json({ 
       success: true, 
-      data: status 
+      data: status,
+      debug: {
+        todayDate: getTodayDate(),
+        currentTime: getCurrentTime(),
+        rawUTC: new Date().toISOString(),
+        rawLocal: new Date().toString(),
+      }
     });
   } catch (error) {
     console.error('Check time guard error:', error);
