@@ -600,8 +600,12 @@ export async function getClassStats(classId: number, date: string): Promise<Clas
     const subjectRecords = records.filter((r) => r.subject_id === subject.id);
     const subjectExemptions = exemptions.filter((e) => e.subject_id === subject.id);
     
-    const submitted = subjectRecords.length;
+    // 豁免学生ID集合
+    const exemptedStudentIds = new Set(subjectExemptions.map((e) => e.student_id));
+    // 已交且未豁免的人数
+    const submittedOnly = subjectRecords.filter((r) => !exemptedStudentIds.has(r.student_id)).length;
     const exempted = subjectExemptions.length;
+    const submitted = submittedOnly;
     const total = students.length;
     const notSubmitted = total - submitted - exempted;
     const completed = submitted + exempted;
@@ -652,6 +656,16 @@ export async function getStudentStatuses(
     const record = recordMap.get(student.id);
     const exemption = exemptionMap.get(student.id);
     
+    // 豁免优先：已豁免的学生即使已交也显示为豁免
+    if (exemption) {
+      return {
+        student_id: student.id,
+        student_name: student.name,
+        student_code: student.student_code,
+        status: 'exempted' as const,
+      };
+    }
+    
     if (record) {
       return {
         student_id: student.id,
@@ -660,15 +674,6 @@ export async function getStudentStatuses(
         status: 'submitted' as const,
         record_id: record.id,
         submit_time: record.submit_time,
-      };
-    }
-    
-    if (exemption) {
-      return {
-        student_id: student.id,
-        student_name: student.name,
-        student_code: student.student_code,
-        status: 'exempted' as const,
       };
     }
     
