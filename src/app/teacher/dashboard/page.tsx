@@ -2,7 +2,15 @@
 
 import { Suspense, useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { getClassById, getClassStats, getStudentStatuses, createExemption, deleteHomeworkRecord, getTodayDate } from '@/lib/database';
+import {
+  getClassById,
+  getClassStats,
+  getStudentStatuses,
+  createExemption,
+  deleteExemption,
+  deleteHomeworkRecord,
+  getTodayDate,
+} from '@/lib/database';
 import type { Class, ClassStats, StudentStatus } from '@/types/database';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -286,6 +294,22 @@ function DashboardContent() {
     }
   }
 
+  async function handleCancelExemption(exemptionId: number | undefined) {
+    if (exemptionId == null) {
+      alert('未找到豁免记录，请刷新后重试');
+      return;
+    }
+    if (!confirm('确定取消该生的今日豁免吗？取消后若未提交将回到未交名单。')) return;
+
+    try {
+      await deleteExemption(exemptionId);
+      await loadStats();
+    } catch (error) {
+      console.error('Cancel exemption error:', error);
+      alert('取消豁免失败，请重试');
+    }
+  }
+
   if (loading || !stats) {
     return (
       <div className="min-h-screen bg-gray-50 p-4">
@@ -427,45 +451,71 @@ function DashboardContent() {
             <Card>
               <CardHeader>
                 <CardTitle>
-                  已提交名单
-                  {statusesLoading ? '（加载中...）' : ` (${studentStatuses.filter(s => s.status === 'submitted').length}人)`}
+                  已交名单
+                  {statusesLoading
+                    ? '（加载中...）'
+                    : ` (${studentStatuses.filter((s) => s.status === 'submitted' || s.status === 'exempted').length}人)`}
                 </CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
                   {studentStatuses
-                    .filter(s => s.status === 'submitted')
+                    .filter((s) => s.status === 'submitted' || s.status === 'exempted')
                     .map((student) => (
-                      <div 
+                      <div
                         key={student.student_id}
-                        className="flex items-center justify-between p-3 bg-green-50 rounded-lg"
+                        className="relative flex items-center justify-between gap-3 rounded-lg bg-green-50 p-3"
                       >
-                        <div className="flex items-center gap-3">
-                          <span className="text-xl">✅</span>
-                          <div>
+                        <div className="flex min-w-0 flex-1 items-center gap-3">
+                          <span className="text-xl shrink-0">
+                            {student.status === 'exempted' ? '📋' : '✅'}
+                          </span>
+                          <div className="min-w-0">
                             <p className="font-medium">{student.student_name}</p>
                             <p className="text-xs text-gray-500">学号: {student.student_code}</p>
                           </div>
                         </div>
-                        <Button 
-                          variant="ghost" 
-                          size="sm"
-                          onClick={() => {
-                            if (!student.record_id) {
-                              alert('未找到可撤销的提交记录');
-                              return;
-                            }
-                            handleRevoke(student.record_id);
-                          }}
-                        >
-                          撤销
-                        </Button>
+                        <div className="flex shrink-0 flex-col items-end justify-center gap-1">
+                          {student.status === 'exempted' && (
+                            <>
+                              <span
+                                className="rounded bg-amber-500 px-1 py-0.5 text-[10px] font-semibold leading-none text-white shadow-sm"
+                                title="豁免"
+                              >
+                                免
+                              </span>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 text-amber-800 hover:text-amber-950"
+                                onClick={() => handleCancelExemption(student.exemption_id)}
+                              >
+                                取消豁免
+                              </Button>
+                            </>
+                          )}
+                          {student.status === 'submitted' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                if (!student.record_id) {
+                                  alert('未找到可撤销的提交记录');
+                                  return;
+                                }
+                                handleRevoke(student.record_id);
+                              }}
+                            >
+                              撤销
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     ))}
-                  
-                  {studentStatuses.filter(s => s.status === 'submitted').length === 0 && (
+
+                  {studentStatuses.filter((s) => s.status === 'submitted' || s.status === 'exempted').length === 0 && (
                     <p className="text-center text-gray-500 py-8">
-                      {statusesLoading ? '名单加载中...' : '暂无已提交记录'}
+                      {statusesLoading ? '名单加载中...' : '暂无已交记录'}
                     </p>
                   )}
                 </div>

@@ -115,4 +115,6 @@ export interface StudentStatus {
   status: 'submitted' | 'not_submitted' | 'exempted';
   record_id?: number;
   submit_time?: string;
+  /** 豁免记录 id，仅 status 为 exempted 时有值，用于取消豁免 */
+  exemption_id?: number;
 }

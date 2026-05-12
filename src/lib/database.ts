@@ -465,6 +465,10 @@ export async function createExemption(
 }
 
 export async function deleteExemption(id: number): Promise<void> {
+  if (isBrowser) {
+    await apiRequest<null>(`/api/exemptions?id=${id}`, { method: 'DELETE' });
+    return;
+  }
   const client = await getSupabaseClient();
   const { error } = await client.from('homework_exemptions').delete().eq('id', id);
   if (error) throw new Error(`删除豁免记录失败: ${error.message}`);
@@ -663,6 +667,7 @@ export async function getStudentStatuses(
         student_name: student.name,
         student_code: student.student_code,
         status: 'exempted' as const,
+        exemption_id: exemption.id,
       };
     }
     
