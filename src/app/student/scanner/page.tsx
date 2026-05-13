@@ -62,6 +62,14 @@ function ScannerContent() {
       names: matched[3].trim(),
     };
   })();
+  const resultIdentityLabel =
+    lastResult?.student && lastResult?.subject
+      ? `${lastResult.student.name} · ${lastResult.subject.name}`
+      : null;
+  const resultStatusMessage =
+    lastResult?.type === 'duplicate'
+      ? '今天已提交，请勿重复提交'
+      : lastResult?.message ?? '';
   const inputRef = useRef<HTMLInputElement>(null);
   const bufferTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -747,23 +755,47 @@ function ScannerContent() {
           <div 
             className={`fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 animate-in fade-in zoom-in duration-300`}
           >
-            <Card className={`min-w-[300px] text-center ${
+            <Card className={`min-w-[320px] max-w-[min(88vw,760px)] text-center shadow-2xl ${
               lastResult.type === 'success' ? 'bg-green-50 border-green-500' :
-              lastResult.type === 'duplicate' ? 'bg-amber-50 border-amber-500' :
+              lastResult.type === 'duplicate' ? 'bg-amber-50/95 border-amber-500' :
               'bg-red-50 border-red-500'
             }`}>
-              <CardContent className="pt-6">
-                <div className="text-5xl mb-4">
+              <CardContent className="px-8 py-8">
+                <div className="text-6xl mb-5">
                   {lastResult.type === 'success' ? '✅' :
                    lastResult.type === 'duplicate' ? '❌' : '⚠️'}
                 </div>
-                <p className={`text-xl font-semibold ${
-                  lastResult.type === 'success' ? 'text-green-700' :
-                  lastResult.type === 'duplicate' ? 'text-amber-700' :
-                  'text-red-700'
-                }`}>
-                  {lastResult.message}
-                </p>
+                {resultIdentityLabel ? (
+                  <div className="space-y-3">
+                    <p className={`text-3xl md:text-4xl font-bold tracking-tight ${
+                      lastResult.type === 'success' ? 'text-green-800' :
+                      lastResult.type === 'duplicate' ? 'text-amber-900' :
+                      'text-red-800'
+                    }`}>
+                      {resultIdentityLabel}
+                    </p>
+                    <p className={`text-xl md:text-2xl font-semibold ${
+                      lastResult.type === 'success' ? 'text-green-700' :
+                      lastResult.type === 'duplicate' ? 'text-amber-700' :
+                      'text-red-700'
+                    }`}>
+                      {resultStatusMessage}
+                    </p>
+                    {lastResult.type === 'duplicate' && (
+                      <p className="text-sm md:text-base text-amber-700/80">
+                        请确认是否拿错二维码
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className={`text-xl font-semibold ${
+                    lastResult.type === 'success' ? 'text-green-700' :
+                    lastResult.type === 'duplicate' ? 'text-amber-700' :
+                    'text-red-700'
+                  }`}>
+                    {lastResult.message}
+                  </p>
+                )}
               </CardContent>
             </Card>
           </div>
