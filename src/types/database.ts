@@ -82,6 +82,10 @@ export interface SubmitResult {
   attemptedSubmitDate?: string;
   /** 原始 Postgres 错误码，如 23505=唯一约束（勿依赖 message 子串，避免误判） */
   postgresCode?: string;
+  /** 解析后的二维码对象，便于排查扫错码或环境数据异常 */
+  qrData?: QRCodeData;
+  /** 命中重复时已存在的同日记录 */
+  duplicateRecord?: HomeworkRecord;
 }
 
 export interface TimeGuardStatus {

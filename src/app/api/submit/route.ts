@@ -17,8 +17,13 @@ export async function POST(request: NextRequest) {
     const result = await submitHomeworkWithValidation(qrCode);
     console.info('[api/submit]', 'response', {
       type: result.type,
+      qrData: result.qrData,
+      studentName: result.student?.name,
+      subjectName: result.subject?.name,
       attemptedSubmitDate: result.attemptedSubmitDate,
       postgresCode: result.postgresCode,
+      duplicateRecordId: result.duplicateRecord?.id,
+      duplicateRecordSubmitTime: result.duplicateRecord?.submit_time,
     });
     return NextResponse.json(result);
   } catch (error) {

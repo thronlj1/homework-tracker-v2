@@ -352,6 +352,25 @@ export async function getHomeworkRecords(
   return data || [];
 }
 
+async function getHomeworkRecordByStudentSubjectDate(
+  classId: number,
+  studentId: number,
+  subjectId: number,
+  date: string
+): Promise<HomeworkRecord | null> {
+  const client = await getSupabaseClient();
+  const { data, error } = await client
+    .from('homework_records')
+    .select('*')
+    .eq('class_id', classId)
+    .eq('student_id', studentId)
+    .eq('subject_id', subjectId)
+    .eq('submit_date', date)
+    .maybeSingle();
+  if (error) throw new Error(`获取重复提交冲突记录失败: ${error.message}`);
+  return data;
+}
+
 function getPostgresErrorCode(err: unknown): string | undefined {
   if (err && typeof err === 'object' && 'code' in err) {
     const c = (err as { code?: string }).code;
@@ -748,9 +767,14 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
   }
 
   console.info('[homework-submit]', 'attempt', {
+    qrCode,
+    qrData,
     classId: qrData.class_id,
+    studentClassId: student.class_id,
     studentId: qrData.student_id,
+    studentName: student.name,
     subjectId: qrData.subject_id,
+    subjectName: subject.name,
     attemptedSubmitDate: today,
     chinaTime: getCurrentTime(),
     utc: new Date().toISOString(),
@@ -799,21 +823,34 @@ export async function submitHomeworkWithValidation(qrCode: string): Promise<Subm
         };
       }
       // 表上除主键外仅 (student_id, subject_id, submit_date) 唯一
+      const duplicateRecord = await getHomeworkRecordByStudentSubjectDate(
+        qrData.class_id,
+        qrData.student_id,
+        qrData.subject_id,
+        today
+      );
       console.warn('[homework-submit]', 'duplicate same calendar day (23505)', {
+        qrCode,
+        qrData,
         classId: qrData.class_id,
         studentId: qrData.student_id,
+        studentName: student.name,
         subjectId: qrData.subject_id,
+        subjectName: subject.name,
         attemptedSubmitDate: today,
         postgresCode: pgCode ?? 'inferred',
+        duplicateRecord,
       });
       return {
         success: false,
-        message: '请勿重复提交',
+        message: `${student.name} - ${subject.name}今天已提交，请勿重复提交`,
         type: 'duplicate',
         student,
         subject,
         attemptedSubmitDate: today,
         postgresCode: pgCode,
+        qrData,
+        duplicateRecord: duplicateRecord ?? undefined,
       };
     }
     console.error('[homework-submit]', 'insert failed (non-duplicate)', {
